@@ -274,6 +274,12 @@ Graft the remaining sts together.`, { rowHeight: 4 });
   const pickups = r.nodes.filter((n) => n.op === 'pick up');
   assert.equal(pickups.length, 10);
   assert.ok(pickups.every((n) => r.nodes[n.parents[0]].kind === 'sl'));
+  // The round must not twist: the first pick-ups run along the edge next to the first
+  // held (instep) stitch, which is where the flap's right-side rows end; the second set
+  // along the edge where they begin.
+  const edgeOf = (n) => { const p = r.nodes[n.parents[0]]; const row = r.rows[p.row]; const atStart = p.pos === 0; return (row.side === 'rs') === atStart ? 'R' : 'L'; };
+  assert.ok(pickups.slice(0, 5).every((n) => edgeOf(n) === 'L'));
+  assert.ok(pickups.slice(5).every((n) => edgeOf(n) === 'R'));
   const gusset = r.rows.find((x) => x.section === 'Gusset');
   assert.equal(gusset.wrapped, true);
   assert.equal(gusset.stitchesAfter, 30);

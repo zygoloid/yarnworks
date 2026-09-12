@@ -1018,10 +1018,11 @@ export class Knitter {
     }
     if (rows.length === 0) throw this.err('The flat section has no full-width rows to pick up along', item.loc);
     // Edge R is where right-side rows begin (and wrong-side rows end); edge L the other.
-    // The yarn is at the edge where the section's last row ended.
-    const lastRow = this.rows[(flap.endRow || this.rows.length) - 1];
-    const yarnEdge = lastRow.side === 'ws' ? 'R' : 'L';
-    const edge = flap.edgesUsed === 0 ? yarnEdge : (yarnEdge === 'R' ? 'L' : 'R');
+    // The round continues from the flap into the held stitches, and the first held stitch
+    // is the one after the flap's last stitch of its first (right-side) row, so the first
+    // pick-up runs along edge L and the second along edge R. Picking the edges the other
+    // way round joins the foot to the gusset with a half twist.
+    const edge = flap.edgesUsed === 0 ? 'L' : 'R';
     flap.edgesUsed++;
     const chain = rows.map((r) => {
       const atStart = (edge === 'R') === (r.side === 'rs');
