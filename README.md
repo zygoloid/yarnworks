@@ -82,7 +82,10 @@ measures 5 cm`); `Work the next 28 sts back and forth` to work a flap on
 part of the stitches while the rest are held; `k to 1 st before gap` when
 turning a heel; `pick up and knit 14 sts along the edge of the heel flap`;
 a round that works past its end moves the beginning of the round; `Graft
-the remaining sts together` for a Kitchener-stitched toe. `Gauge: 40 sts
+the remaining sts together` for a Kitchener-stitched toe; `Graft the last
+row to the cast-on edge` closes a strip into a ring or a tube into a torus,
+and `... with a half twist` (or `inside out`) makes a Möbius strip or a
+Klein bottle instead, which the knitter duly warns about. `Gauge: 40 sts
 and 56 rows = 10 cm` in a pattern sets the gauge. Lines beginning with
 `Note:` are ignored.
 

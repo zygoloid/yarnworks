@@ -64,13 +64,16 @@ export function checkOrientable(knit) {
       if (b === null) continue;
       const pa = nodes[a].parents, pb = nodes[b].parents;
       if (pa.length === 0 || pb.length === 0) continue;
-      const x = pa[pa.length - 1], y = pb[0];
-      if (x === y) { faces.push([a, b, x]); continue; }
-      const path = shortPath(y, x, 3);
-      if (path === null) continue;
-      const cycle = [a, b, y, ...path, x];
-      if (new Set(cycle).size !== cycle.length) continue; // degenerate
-      faces.push(cycle);
+      // Grafted stitches join two edges at once (parents on both): one face per side.
+      const sides = pa.length > 1 && pa.length === pb.length ? pa.map((_, t) => [pa[t], pb[t]]) : [[pa[pa.length - 1], pb[0]]];
+      for (const [x, y] of sides) {
+        if (x === y) { faces.push([a, b, x]); continue; }
+        const path = shortPath(y, x, 3);
+        if (path === null) continue;
+        const cycle = [a, b, y, ...path, x];
+        if (new Set(cycle).size !== cycle.length) continue; // degenerate
+        faces.push(cycle);
+      }
     }
   }
 

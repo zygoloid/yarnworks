@@ -205,6 +205,7 @@ export class Knitter {
       stopped: this.stopped,
       reachedStop: this.reachedStop,
       finished: !!this.finished,
+      closedLoop: this.closedLoop || null,
       side: this.side,
       stitchWidth: this.stitchWidth,
       rowHeight: this.rowHeight,
@@ -1055,9 +1056,31 @@ export class Knitter {
     }
   }
 
-  /** Graft the remaining live stitches together (Kitchener stitch), closing the piece. */
+  /**
+   * Column of every loop: cast-on stitches count from 0, and each stitch inherits the
+   * mean column of what it was knit into. Used to line up a graft to the cast-on edge.
+   */
+  columns() {
+    const n = this.nodes.length, col = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      const node = this.nodes[i], row = this.rows[node.row];
+      if (row.castOn) col[i] = node.pos;
+      else if (node.parents.length) { let c = 0; for (const p of node.parents) c += col[p]; col[i] = c / node.parents.length + (node.cableShift || 0); }
+      else if (node.pickedUp) col[i] = col[node.pickedUp.edge];
+      else if (node.pos > 0) col[i] = col[row.nodes[node.pos - 1]] + (row.isRound || row.side === 'ws' ? 1 : -1);
+      else col[i] = 0;
+    }
+    return col;
+  }
+
+  /**
+   * Graft the remaining live stitches: to each other (Kitchener stitch, closing a toe), or
+   * to the cast-on edge, plainly (a ring or a torus) or flipped (a Möbius strip, or a
+   * Klein bottle for a tube).
+   */
   doGraft(s) {
     if (!this.castOn) throw new KnitError('Graft: nothing has been cast on yet', s.loc);
+    if (s.toCastOn) return this.doGraftToCastOn(s);
     const row = this.startRow('Graft', s.loc, this.inRound);
     row.stmt = null;
     const loops = this.left.filter((e) => typeof e === 'number');
@@ -1079,6 +1102,41 @@ export class Knitter {
     this.right = [];
     this.finishRow(false);
     this.finished = true;
+  }
+
+  doGraftToCastOn(s) {
+    const row = this.startRow('Graft', s.loc, this.inRound);
+    row.stmt = null;
+    const live = this.left.filter((e) => typeof e === 'number');
+    const cast = this.rows[0].castOn ? this.rows[0].nodes.filter((id) => this.nodes[id].children.length === 0 || true) : [];
+    if (live.length < 2 || cast.length < 2) throw new KnitError('Graft to the cast-on edge: nothing to graft', s.loc);
+    const col = this.columns();
+    const n = cast.length;
+    // Rank the live stitches by column (around the tube for work in the round), and pair
+    // each with the cast-on stitch of the same rank, or the mirrored rank for a flip.
+    const wrap = (c) => this.inRound ? ((c % n) + n) % n : c;
+    const liveSorted = live.slice().sort((a, b) => wrap(col[a]) - wrap(col[b]));
+    const castSorted = cast.slice().sort((a, b) => col[a] - col[b]);
+    const m = liveSorted.length;
+    const pairs = [];
+    for (let i = 0; i < m; i++) {
+      let j = Math.round(i * n / m);
+      if (s.flip) j = this.inRound ? (n - j) % n : n - 1 - Math.min(n - 1, j);
+      pairs.push([liveSorted[i], castSorted[Math.min(n - 1, j)]]);
+    }
+    // Work the graft in the live stitches' needle order so it is a proper course.
+    const order = new Map(live.map((id, i) => [id, i]));
+    pairs.sort((a, b) => order.get(a[0]) - order.get(b[0]));
+    this.left = [];
+    for (const [a, b] of pairs) {
+      const node = this.newNode({ kind: 'k', op: 'graft', face: 'k', parents: [a, b], loc: s.loc });
+      node.graft = true;
+      node.finished = true;
+    }
+    this.right = [];
+    this.finishRow(false);
+    this.finished = true;
+    this.closedLoop = { twist: !!s.flip, round: this.inRound };
   }
 
   stitchesToMarker() {

@@ -191,6 +191,38 @@ export class Relaxer {
       }
       this.set(i, x + jitter(), y + jitter(), z + jitter());
     }
+    if (!prev && this.knit.closedLoop) this.bendIntoLoop();
+  }
+
+  /**
+   * A piece whose end is grafted to its cast-on edge starts out bent into a ring, with
+   * its cross-section turned through a half turn along the way for a twisted join, so
+   * the relaxation only has to tidy the join rather than fold the piece from straight.
+   */
+  bendIntoLoop() {
+    const pos = this.pos, nodes = this.nodes;
+    let yMin = Infinity, yMax = -Infinity;
+    for (let i = 0; i < this.n; i++) { if (nodes[i].graft) continue; yMin = Math.min(yMin, pos[3 * i + 1]); yMax = Math.max(yMax, pos[3 * i + 1]); }
+    const C = yMax - yMin + this.h;
+    const R = C / (2 * Math.PI);
+    const twist = this.knit.closedLoop.twist;
+    for (let i = 0; i < this.n; i++) {
+      if (nodes[i].graft) continue;
+      const x = pos[3 * i], y = pos[3 * i + 1], z = pos[3 * i + 2];
+      const th = 2 * Math.PI * (y - yMin) / C;
+      let cx = x, cz = z;
+      if (twist) { const a = th / 2; cx = x * Math.cos(a) - z * Math.sin(a); cz = x * Math.sin(a) + z * Math.cos(a); }
+      pos[3 * i] = cx; pos[3 * i + 1] = (R + cz) * Math.sin(th); pos[3 * i + 2] = (R + cz) * Math.cos(th);
+    }
+    // Graft stitches sit between their (now adjacent) parents.
+    for (let i = 0; i < this.n; i++) {
+      const node = nodes[i];
+      if (!node.graft || !node.parents.length) continue;
+      let x = 0, y = 0, z = 0;
+      for (const p of node.parents) { x += pos[3 * p]; y += pos[3 * p + 1]; z += pos[3 * p + 2]; }
+      const m = node.parents.length;
+      pos[3 * i] = x / m; pos[3 * i + 1] = y / m; pos[3 * i + 2] = z / m;
+    }
   }
 
   /** Outward normal of the fabric at a point (the right side faces +z when flat, outward when round). */

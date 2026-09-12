@@ -328,8 +328,15 @@ export class Parser {
   /** "Graft the remaining sts together", "Kitchener stitch the toe closed", "Close the toe with kitchener stitch". */
   parseGraft(cur) {
     const first = cur.next();
-    while (!cur.atEnd()) cur.next();
-    return { type: 'graft', loc: cur.loc(first) };
+    let toCastOn = false, flip = false;
+    while (!cur.atEnd()) {
+      const t = cur.next();
+      if (t.type !== 'word') continue;
+      if (t.value === 'cast' && (cur.isWord('on') || (cur.isPunct('-') && cur.isWord('on', 1)))) toCastOn = true;
+      if (['beginning', 'start', 'first'].includes(t.value)) toCastOn = true;
+      if (['twist', 'twisted', 'inside', 'flipped', 'flip', 'reversed', 'mobius', 'möbius', 'moebius'].includes(t.value)) flip = true;
+    }
+    return { type: 'graft', toCastOn, flip, loc: cur.loc(first) };
   }
 
   /** "Resume working in the round", "Rejoin in the round", "Continue in the round". */

@@ -617,6 +617,12 @@ function stepSim() {
     s.lastMesh = performance.now();
     s.redrew = true;
   }
+  if (s.done >= s.total && !s.dragging && s.settleSteps === 0 && !s.globalDone) {
+    // Finish with a few global-solver steps: they move the whole piece at once, which
+    // the sweeps cannot (a tube grafted into a ring, a heel pulling the foot round).
+    s.globalDone = true;
+    s.settleSteps = 12;
+  }
   if (s.done < s.total || s.dragging || s.settleSteps > 0) {
     $('status').textContent = s.dragging ? `${view.nodes.length} stitches · moving` : `${view.nodes.length} stitches · relaxing ${Math.round(100 * s.done / s.total)}%`;
     s.raf = requestAnimationFrame(stepSim);
@@ -720,6 +726,7 @@ function initDragging() {
     sim.dragging = false;
     // Settle with the global solver for a while, then finish.
     sim.settleSteps = 25;
+    sim.globalDone = true;
     sim.total = Math.max(sim.total, sim.done);
     scene.controls.enabled = true;
     canvas.style.cursor = state.moveMode ? 'grab' : '';

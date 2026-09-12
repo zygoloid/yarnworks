@@ -121,6 +121,34 @@ Repeat rnds 1-2 until there are 20 (24, 28) sts.
 Graft the remaining sts together.`,
   },
   {
+    name: 'Torus (donut)',
+    text: `# A tube whose last round is grafted to its first: a torus.
+Cast on 24 sts.
+Join in the round.
+Rnd 1: k.
+Repeat rnd 1 until piece measures 22 cm.
+Graft the last round to the cast-on edge.`,
+  },
+  {
+    name: 'Möbius strip',
+    text: `# A long strip grafted to its own cast-on edge with a half twist. It has only
+# one side, so the knitter warns that the fabric has no consistent right side.
+Cast on 12 sts.
+Row 1: k.
+Repeat row 1 until piece measures 30 cm.
+Graft the last row to the cast-on edge with a half twist.`,
+  },
+  {
+    name: 'Klein bottle',
+    text: `# A tube grafted to its own cast-on edge inside out. A Klein bottle cannot sit
+# in three dimensions without passing through itself, so the relaxation does its best.
+Cast on 24 sts.
+Join in the round.
+Rnd 1: k.
+Repeat rnd 1 until piece measures 22 cm.
+Graft the last round to the cast-on edge inside out.`,
+  },
+  {
     name: 'Cable panel',
     text: `Cast on 22 sts.
 Row 1 (RS): p3, k4, p2, k8, p2, k3.
