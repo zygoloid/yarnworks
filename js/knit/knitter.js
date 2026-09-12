@@ -7,6 +7,7 @@
 
 import { OPS, isSized } from '../pattern/parser.js';
 import { PatternError } from '../pattern/lexer.js';
+import { checkOrientable } from './topology.js';
 
 export class KnitError extends PatternError {}
 
@@ -34,6 +35,8 @@ export class Knitter {
     this.reachedStop = false;
     // User-placed markers: [{row, stitch}] — placed after `stitch` stitches of row index `row`.
     this.userMarkers = opts.markers || [];
+    // Which flap edge the first pick-up runs along ('L' is correct; 'R' reproduces a twisted join, for testing).
+    this.pickUpFirstEdge = opts.pickUpFirstEdge || 'L';
 
     this.nodes = [];
     this.rows = [];
@@ -186,6 +189,13 @@ export class Knitter {
   }
 
   result() {
+    if (this.nodes.length > 2 && !this.stopAt) {
+      const topo = checkOrientable({ nodes: this.nodes, rows: this.rows });
+      if (!topo.ok) {
+        const row = this.rows[topo.conflict.row];
+        this.message('problem', `${row.label}: the work twists on itself here, so the fabric has no consistent right side (like a Möbius strip or Klein bottle). Check the joins and pick-ups around this point.`, row.loc);
+      }
+    }
     return {
       nodes: this.nodes,
       rows: this.rows,
@@ -1022,7 +1032,8 @@ export class Knitter {
     // is the one after the flap's last stitch of its first (right-side) row, so the first
     // pick-up runs along edge L and the second along edge R. Picking the edges the other
     // way round joins the foot to the gusset with a half twist.
-    const edge = flap.edgesUsed === 0 ? 'L' : 'R';
+    const first = this.pickUpFirstEdge;
+    const edge = flap.edgesUsed === 0 ? first : (first === 'L' ? 'R' : 'L');
     flap.edgesUsed++;
     const chain = rows.map((r) => {
       const atStart = (edge === 'R') === (r.side === 'rs');

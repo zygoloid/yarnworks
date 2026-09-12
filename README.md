@@ -94,7 +94,9 @@ Sizes: numbers can be given per size as `12 (14, 16)`, `12 [14, 16]` or
 `12/14/16`.
 
 Checks: a stitch count at the end of a row, such as `(18 sts)` or `— 18 sts`,
-is verified. Lines starting with `#` or `//` are comments.
+is verified, and the knitter warns if the work twists on itself so that
+the fabric has no consistent right side (a Möbius strip or Klein bottle,
+which a wrongly joined flap or gusset can produce). Lines starting with `#` or `//` are comments.
 
 ## Development
 
