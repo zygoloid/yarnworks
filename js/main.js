@@ -22,6 +22,7 @@ const state = {
   sizeIndex: 0,
   roundMode: 'auto',
   tension: 'normal',
+  plies: 3,
   yarns: { A: { kind: 'solid', color: DEFAULT_COLORS.A, stripes: [{ color: '#b5443c', length: 60 }, { color: '#e8d9b5', length: 40 }] } },
   stop: null, // null = finished piece; else {row, stitch}
   lifelines: [],
@@ -71,6 +72,8 @@ function initSettings() {
   $('gauge-rows').value = state.rows;
   $('round').value = state.roundMode;
   $('tension').value = state.tension;
+  $('plies').value = String(state.plies || 3);
+  $('plies').addEventListener('change', () => { state.plies = parseInt($('plies').value, 10) || 3; scheduleUpdate(true, true); });
   $('tension').addEventListener('change', () => { state.tension = $('tension').value; scheduleUpdate(true); });
 
   weight.addEventListener('change', () => {
@@ -496,8 +499,8 @@ function rebuildScene() {
   const path = pathBuilder.build();
   const colors = new YarnColors(state.yarns);
   const n = view.nodes.length;
-  const quality = n < 4000 ? { subdivisions: 4 } : n < 12000 ? { subdivisions: 3 } : { subdivisions: 2 };
-  scene.setYarn(path, { radius: yarnRadius, ...quality, colorAt: (len, id) => colors.colorAt(len, view.nodes[id].yarn) });
+  const quality = n < 3000 ? { subdivisions: 7 } : n < 8000 ? { subdivisions: 5 } : n < 20000 ? { subdivisions: 3 } : { subdivisions: 2 };
+  scene.setYarn(path, { radius: yarnRadius, plies: state.plies || 3, ...quality, colorAt: (len, id) => colors.colorAt(len, view.nodes[id].yarn) });
 
   // Needles.
   const needleRadius = (state.needle || 4) / 2;

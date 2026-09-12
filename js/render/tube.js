@@ -169,7 +169,7 @@ export function buildYarnMesh(path, opts) {
     strands.push({ pts, colors });
   }
   const group = new THREE.Group();
-  const mesh = buildCapsuleMesh(strands, { radius: opts.radius, plies: 3 });
+  const mesh = buildCapsuleMesh(strands, { radius: opts.radius, plies: opts.plies || 3 });
   group.add(mesh);
   group.userData.yarnMaterial = mesh.material;
   return group;

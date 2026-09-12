@@ -80,12 +80,11 @@ flat in vec3 fDa;
 flat in vec3 fDb;
 
 uniform mat4 projectionMatrix; // same program uniform as the vertex stage
-uniform float radius;
+uniform float radius;          // outer radius of the yarn
 uniform float viewportHeight;
-uniform float aaRim;      // 1 when the framebuffer is multisampled (alpha-to-coverage works), else 0
+uniform float aaRim;           // 1 when the framebuffer is multisampled (alpha-to-coverage works), else 0
 uniform float plies;
-uniform float plyAmount;
-uniform float plyPitch;
+uniform float plyPitch;        // arc length of one full twist
 uniform float fibreBump;
 uniform vec3 hemiSky;
 uniform vec3 hemiGround;
@@ -110,103 +109,208 @@ float vnoise(vec2 p) {
   return mix(mix(hash21(i), hash21(i + vec2(1.0, 0.0)), f.x), mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), f.x), f.y);
 }
 
+// Two octaves of value noise, the second rotated so the grid does not show.
+float fibreNoise(vec2 p) {
+  vec2 q = vec2(p.x * 0.83 - p.y * 0.55, p.x * 0.55 + p.y * 0.83) * 2.3 + 17.0;
+  return vnoise(p) * 0.6 + vnoise(q) * 0.4;
+}
+
+// Segment geometry, set up once in main.
+vec3 gA, gDn;
+float gLen, gPlyR, gRho;
+
+// Reference frame (N, B) around the axis at axial position z, blended between the
+// transported frames at the two ends so it turns continuously along the curve.
+void frameAt(float z, out vec3 N, out vec3 B) {
+  float s = clamp(z / max(gLen, 1e-6), 0.0, 1.0);
+  vec3 n = mix(fN, fNb, s);
+  n -= gDn * dot(n, gDn);
+  if (dot(n, n) < 1e-8) n = cross(gDn, abs(gDn.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0));
+  N = normalize(n);
+  B = cross(gDn, N);
+}
+
+// Is a point on this segment's stretch of the yarn? Each segment owns the slab between
+// the planes perpendicular to its axis at its ends. On the outer side of a bend those
+// slabs leave a wedge that belongs to no segment, so a point just past an end plane is
+// also accepted when it lies beyond the neighbouring segment's own end plane.
+bool inSlab(vec3 p) {
+  float z = dot(p - gA, gDn);
+  if (z >= 0.0 && z <= gLen) return true;
+  if (z < 0.0) {
+    if (z < -radius) return false;
+    vec3 dPrev = 2.0 * dot(fDa, gDn) * fDa - gDn;   // previous segment's direction
+    return dot(p - gA, dPrev) > 0.0;
+  }
+  if (z > gLen + radius) return false;
+  vec3 dNext = 2.0 * dot(fDb, gDn) * fDb - gDn;     // next segment's direction
+  return dot(p - fB, dNext) < 0.0;
+}
+
+// Signed distance from the point at ray parameter t to the true (helical) surface of
+// ply k, measured in the cross-section plane. Used to refine straight-cylinder hits.
+float nPliesG;
+float helixField(vec3 ro, vec3 rd, float t, float k) {
+  vec3 p = ro + t * rd;
+  float z = dot(p - gA, gDn);
+  vec3 N, B;
+  frameAt(z, N, B);
+  float phi = 6.2831853 * (k / nPliesG + (fS.x + z) / plyPitch);
+  vec3 c = gA + z * gDn + gRho * (cos(phi) * N + sin(phi) * B);
+  return length(p - c) - gPlyR;
+}
+
+// Ray against an infinite cylinder (axis point c, unit direction e, radius r).
+// Returns the near root, or -1.
+float rayCylinder(vec3 ro, vec3 rd, vec3 c, vec3 e, float r) {
+  vec3 oc = ro - c;
+  vec3 dd = rd - e * dot(rd, e);
+  vec3 oo = oc - e * dot(oc, e);
+  float a = dot(dd, dd);
+  if (a < 1e-9) return -1.0;
+  float b = dot(dd, oo), cc = dot(oo, oo) - r * r;
+  float disc = b * b - a * cc;
+  if (disc < 0.0) return -1.0;
+  return (-b - sqrt(disc)) / a;
+}
+
 void main() {
   vec3 ro = cameraPosition;
   vec3 rd = normalize(vWorld - ro);
   vec3 ba = fB - fA;
-  float len = length(ba);
-  vec3 dn = ba / max(len, 1e-6);
+  gA = fA;
+  gLen = length(ba);
+  gDn = ba / max(gLen, 1e-6);
+  // Ply layout: circles of radius gPlyR touching each other, centres at radius gRho.
+  gPlyR = plies > 1.5 ? radius / (1.0 + 1.0 / sin(3.14159265 / plies)) : radius;
+  gRho = radius - gPlyR;
+
+  // Bounding capsule: closest approach of the ray to the segment.
   vec3 oa = ro - fA;
-  // Closest approach between the view ray and the segment (clamped), for the
-  // anti-aliased silhouette and the behind-camera test.
-  float B = dot(rd, dn);
+  float Bd = dot(rd, gDn);
   float D = dot(rd, oa);
-  float E = dot(dn, oa);
-  float denom = 1.0 - B * B;
-  float sc = denom > 1e-8 ? clamp((E - D * B) / denom, 0.0, len) : 0.0;
-  float tc = sc * B - D;
-  vec3 axisPt = fA + sc * dn;
+  float E = dot(gDn, oa);
+  float denom = 1.0 - Bd * Bd;
+  float sc = denom > 1e-8 ? clamp((E - D * Bd) / denom, 0.0, gLen) : 0.0;
+  float tc = sc * Bd - D;
   vec3 q = ro + tc * rd;
-  float dist = length(q - axisPt);
-  float px = aaRim * 2.0 * max(tc, 1e-3) / (projectionMatrix[1][1] * viewportHeight);
+  float dist = length(q - (fA + sc * gDn));
   if (dist > radius || tc <= 0.0) discard;
-  // Anti-aliased silhouette: fade out over the last pixel inside the true edge.
-  float alpha = 1.0 - smoothstep(radius - px, radius, dist);
+  float px = 2.0 * max(tc, 1e-3) / (projectionMatrix[1][1] * viewportHeight);
 
-  // Capsule intersection: cylinder body, else a sphere at the nearer end. Capsules
-  // overlap at the joints, so the union has no gaps however short the segments are.
-  vec3 p;
-  vec3 n;
-  float h;
-  if (dist < radius - 1e-5) {
-    float t = -1.0;
-    if (denom > 1e-6) {
-      vec3 dd = rd - dn * B;
-      vec3 oo = oa - dn * E;
-      float a = dot(dd, dd), b = dot(dd, oo), c = dot(oo, oo) - radius * radius;
-      float disc = b * b - a * c;
-      if (disc >= 0.0) {
-        float tb = (-b - sqrt(disc)) / a;
-        float y = E + tb * B;
-        if (tb > 0.0 && y >= 0.0 && y <= len) t = tb;
-      }
+  // Level of detail: once the yarn is only a few pixels wide the plies cannot be
+  // resolved, so render the plain capsule instead (with the ply shading painted on).
+  float lodPlain = step(0.22, px / radius);
+  float nPlies = plies;
+  if (lodPlain > 0.5) { gPlyR = radius; gRho = 0.0; nPlies = 1.0; }
+  nPliesG = nPlies;
+
+  // Each ply is a helix around the axis; over one short segment it is a straight
+  // cylinder to well under a micron, tilted by the helix angle at the segment's middle.
+  float zMid = 0.5 * gLen;
+  vec3 N, B;
+  frameAt(zMid, N, B);
+  float omega = 6.2831853 / plyPitch;          // twist per unit length
+  float best = 1e9;
+  vec3 bestC = gA, bestE = gDn;
+  float bestK = 0.0;
+  float dmin = 1e9;
+  vec3 dminC = gA, dminE = gDn;
+  float dminK = 0.0;
+  for (float k = 0.0; k < nPlies; k += 1.0) {
+    float phi = 6.2831853 * (k / nPlies + (fS.x + zMid) / plyPitch);
+    vec3 radial = cos(phi) * N + sin(phi) * B;
+    vec3 tangent = -sin(phi) * N + cos(phi) * B;
+    vec3 c = gA + zMid * gDn + gRho * radial;
+    vec3 e = normalize(gDn + gRho * omega * tangent);
+    float t = rayCylinder(ro, rd, c, e, gPlyR);
+    if (t > 0.0) {
+      vec3 p = ro + t * rd;
+      if (inSlab(p) && t < best) { best = t; bestC = c; bestE = e; bestK = k; }
     }
-    if (t < 0.0) {
-      // Sphere at whichever end the ray passes.
-      vec3 centre = (E + tc * B) < 0.5 * len ? fA : fB;
-      vec3 oc = ro - centre;
-      float b = dot(rd, oc), c = dot(oc, oc) - radius * radius;
-      float disc = b * b - c;
-      if (disc < 0.0) discard;
-      t = -b - sqrt(disc);
-      if (t < 0.0) discard;
+    // Miss distance for the anti-aliased silhouette.
+    vec3 oc = ro - c;
+    vec3 dd = rd - e * dot(rd, e);
+    vec3 oo = oc - e * dot(oc, e);
+    float a2 = dot(dd, dd);
+    if (a2 > 1e-9) {
+      float tca = -dot(dd, oo) / a2;
+      float miss = length(oo + tca * dd) - gPlyR;
+      if (miss < dmin && tca > 0.0 && inSlab(ro + tca * rd)) { dmin = miss; dminC = c; dminE = e; dminK = k; }
     }
-    p = ro + t * rd;
-    h = dot(p - fA, dn) / max(len, 1e-6);
-  } else {
-    p = q; // grazing silhouette, for the anti-aliasing rim
-    h = sc / max(len, 1e-6);
   }
-  float s = clamp(h, 0.0, 1.0);
-  // Smooth shading across joints: the normal is taken about the axis direction
-  // interpolated between the bisectors at the two ends, so it turns continuously along
-  // the curve, and the spherical ends shade like the neighbouring cylinder.
-  vec3 dMix = mix(fDa, fDb, s);
-  vec3 dSmooth = length(dMix) > 1e-4 ? normalize(dMix) : dn;
-  vec3 q0 = p - (fA + s * ba);
-  vec3 nProj = q0 - dSmooth * dot(q0, dSmooth);
-  float nl = length(nProj);
-  // On a spherical end seen along the axis the projection degenerates; blend back to
-  // the true normal there instead of dividing by zero.
-  vec3 nTrue = normalize(q0);
-  n = normalize(mix(nTrue, nProj / max(nl, 1e-6), smoothstep(0.0, 0.5 * radius, nl)));
-  vec3 fMix = mix(fN, fNb, s);
-  vec3 frameN = fMix - dSmooth * dot(fMix, dSmooth);
-  if (length(frameN) < 1e-4) frameN = cross(dSmooth, abs(dSmooth.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0));
-  frameN = normalize(frameN);
+  float alpha = 1.0;
+  float t = best;
+  vec3 plyC = bestC, plyE = bestE;
+  float plyK = bestK;
+  bool grazing = false;
+  if (best > 1e8) {
+    float rim = aaRim * px;
+    if (dmin > rim || dmin < 0.0) discard;
+    alpha = 1.0 - dmin / max(rim, 1e-6);
+    // Shade the rim at the closest approach to that ply.
+    plyC = dminC; plyE = dminE; plyK = dminK;
+    vec3 oc = ro - plyC;
+    vec3 dd = rd - plyE * dot(rd, plyE);
+    vec3 oo = oc - plyE * dot(oc, plyE);
+    t = -dot(dd, oo) / max(dot(dd, dd), 1e-9);
+    if (t <= 0.0) discard;
+    grazing = true;
+  } else if (gRho > 1e-6) {
+    // Refine the straight-cylinder hit onto the true helical ply with Newton steps, so
+    // the surface and its silhouette are smooth across segment joints.
+    float h = 0.01 * radius;
+    for (int i = 0; i < 3; i++) {
+      float g = helixField(ro, rd, t, plyK);
+      float slope = (helixField(ro, rd, t + h, plyK) - g) / h;
+      if (abs(slope) < 0.05) break;
+      t -= clamp(g / slope, -0.15 * radius, 0.15 * radius);
+    }
+  }
+  vec3 p = ro + t * rd;
+  float z = dot(p - gA, gDn);
+  float s = clamp(z / max(gLen, 1e-6), 0.0, 1.0);
+  float arc = fS.x + z;
 
-  vec3 frameB = normalize(cross(dSmooth, frameN));
-  float theta = atan(dot(n, frameB), dot(n, frameN));
-  float arc = mix(fS.x, fS.y, s);
-  vec3 tangential = normalize(cross(dSmooth, n));
-  // Plies: several rounded strands twisted around the yarn axis. Within each ply the
-  // normal tilts linearly (a round strand); between plies there is a sharp crevice.
-  float phase = plies * theta - 6.2831853 * arc / plyPitch;
-  float u = fract(phase / 6.2831853);              // 0..1 across one ply, crest at 0.5
-  float crevice = 1.0 - smoothstep(0.0, 0.22, min(u, 1.0 - u));   // 1 in the crevice
-  float tilt = (u - 0.5) * 2.0;
-  n = normalize(n + plyAmount * tilt * tangential - plyAmount * 0.35 * tilt * dSmooth);
-  // Detail fades out as the yarn gets small on screen, to avoid shimmering.
-  float detail = 1.0 - smoothstep(0.08, 0.35, px / radius);
-  // Fibres: fine streaks along each ply, bump-mapped from anisotropic noise.
+  // Ply surface normal. The intersection used a straight ply for this segment; for
+  // shading, use the true helix at this point along the curve (yarn axis blended between
+  // the bisectors at the two ends), so joints between segments do not facet.
+  vec3 dSmooth = normalize(mix(fDa, fDb, s));
+  vec3 Nz, Bz;
+  frameAt(z, Nz, Bz);
+  float phiZ = 6.2831853 * (plyK / nPlies + arc / plyPitch);
+  vec3 radialZ = cos(phiZ) * Nz + sin(phiZ) * Bz;
+  vec3 tangentZ = -sin(phiZ) * Nz + cos(phiZ) * Bz;
+  vec3 axisPt = gA + z * gDn;
+  vec3 helixC = axisPt + gRho * radialZ;
+  vec3 eSmooth = normalize(dSmooth + gRho * omega * tangentZ);
+  vec3 pc = p - helixC;
+  pc -= eSmooth * dot(pc, eSmooth);
+  vec3 n = normalize(pc);
+  if (lodPlain > 0.5) { vec3 q0 = p - axisPt; n = normalize(q0 - dSmooth * dot(q0, dSmooth)); }
+  float detail = 1.0 - smoothstep(0.06, 0.3, px / radius);
+  // Fibres: streaks along the ply, bump-mapped from anisotropic noise.
+  vec3 u1 = gRho > 1e-6 ? radialZ : Nz;
+  vec3 u2 = cross(eSmooth, u1);
+  float psi = atan(dot(pc, u2), dot(pc, u1));
   float wa = mod(arc, 512.0);
-  float alongPly = wa * 0.7;
-  float acrossPly = (theta * plies / 6.2831853 - wa / plyPitch) * 28.0;
-  float f0 = vnoise(vec2(alongPly, acrossPly)) * 0.6 + vnoise(vec2(alongPly * 2.1, acrossPly * 2.3)) * 0.4;
-  float f1 = vnoise(vec2(alongPly, acrossPly + 0.4)) * 0.6 + vnoise(vec2(alongPly * 2.1, (acrossPly + 0.4) * 2.3)) * 0.4;
-  float f2 = vnoise(vec2(alongPly + 0.4, acrossPly)) * 0.6 + vnoise(vec2((alongPly + 0.4) * 2.1, acrossPly * 2.3)) * 0.4;
-  n = normalize(n + detail * fibreBump * ((f1 - f0) * tangential + 0.3 * (f2 - f0) * dSmooth));
-  float shade = (1.0 - 0.6 * crevice) * (0.82 + 0.36 * mix(0.5, f0, detail));
+  float along = wa * 0.8;
+  float across = psi * 1.6;
+  float f0 = fibreNoise(vec2(along, across));
+  float f1 = fibreNoise(vec2(along, across + 0.5));
+  float f2 = fibreNoise(vec2(along + 0.5, across));
+  vec3 tPsi = normalize(cross(eSmooth, n));
+  n = normalize(n + detail * fibreBump * ((f1 - f0) * tPsi + 0.3 * (f2 - f0) * eSmooth));
+  // Crevices between plies are darker: occlusion by the neighbouring plies.
+  float depthIn = length(p - axisPt) / radius;   // 1 at the outside, less in a crevice
+  float ao = mix(0.45, 1.0, smoothstep(0.55, 1.0, depthIn));
+  if (lodPlain > 0.5 && plies > 1.5) {
+    // Painted plies for the distant view.
+    float theta = atan(dot(p - axisPt, B), dot(p - axisPt, N));
+    float u = fract(plies * theta / 6.2831853 + arc / plyPitch);
+    ao = 1.0 - 0.35 * (1.0 - smoothstep(0.0, 0.2, min(u, 1.0 - u)));
+  }
+  float shade = ao * (0.85 + 0.3 * mix(0.5, f0, detail));
 
   vec3 albedo = mix(fCa, fCb, s) * shade;
   vec3 col = albedo * mix(hemiGround, hemiSky, 0.5 + 0.5 * n.y);
@@ -216,9 +320,9 @@ void main() {
     float nl = max(dot(n, l), 0.0);
     col += albedo * lightColor[i] * nl;
     vec3 hv = normalize(l - rd);
-    spec += lightColor[i] * 0.08 * pow(max(dot(n, hv), 0.0), 12.0) * nl;
+    spec += lightColor[i] * 0.06 * pow(max(dot(n, hv), 0.0), 12.0) * nl;
   }
-  col += spec;
+  col += spec * ao;
 
   vec4 clip = projectionMatrix * viewMatrix * vec4(p, 1.0);
   gl_FragDepth = (clip.z / clip.w) * 0.5 + 0.5;
@@ -337,9 +441,8 @@ export function buildCapsuleMesh(strands, opts) {
       viewportHeight: { value: 900 },
       aaRim: { value: 1 },
       plies: { value: opts.plies ?? 3 },
-      plyAmount: { value: opts.plyAmount ?? 0.45 },
-      plyPitch: { value: opts.plyPitch ?? opts.radius * 6 },
-      fibreBump: { value: opts.fibreBump ?? 0.6 },
+      plyPitch: { value: opts.plyPitch ?? opts.radius * 7 },
+      fibreBump: { value: opts.fibreBump ?? 0.9 },
       hemiSky: { value: new THREE.Color(0.62, 0.62, 0.62) },
       hemiGround: { value: new THREE.Color(0.30, 0.28, 0.27) },
       lightDir: { value: [new THREE.Vector3(100, 220, 180), new THREE.Vector3(-160, -60, 140), new THREE.Vector3(20, 80, -220), new THREE.Vector3(-40, -200, -60)] },
