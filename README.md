@@ -177,3 +177,19 @@ The page exposes `window.yarnworks` (scene, state, knit results, positions,
   segment (mitred against its neighbours), writing the true depth, normal,
   ply twist and fibre texture per pixel. That keeps the yarn perfectly round
   at any zoom with two triangles per segment.
+
+## Data privacy notice
+
+No information entered into Yarnworks is ever sent to a remote server nor
+maintained anywhere other than in your own browser.
+
+## AI usage notice
+
+While the ideas and inspiration behind this project were human, the software
+was developed using AI. However, AI is *not* used in any way while running
+Yarnworks.
+
+## Disclaimer
+
+The views, code, and opinions expressed here are those of their authors and do
+not represent those of their current or past employers.
