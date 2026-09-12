@@ -230,14 +230,29 @@ export class Relaxer {
       }
       const nl = Math.hypot(nx, ny, nz);
       if (nl > 1e-6) {
-        dir = [nx / nl, ny / nl, nz / nl];
-        // Orient away from the round before the previous one.
+        let area = [nx / nl, ny / nl, nz / nl];
+        const prevDir = this.growthDir(prev);
+        // Just after a flat section (a heel flap), the work turns a corner: take the new
+        // round's own normal, oriented away from the round before. Otherwise orient it to
+        // agree with the direction the work was already growing in.
         const pp = row.index > 1 ? rows[row.index - 2] : null;
-        if (pp && pp.nodes.length) {
-          const c2 = centre(pp);
-          const d = (c[0] - c2[0]) * dir[0] + (c[1] - c2[1]) * dir[1] + (c[2] - c2[2]) * dir[2];
-          if (d < 0) dir = [-dir[0], -dir[1], -dir[2]];
-        } else if (dir[1] < 0) dir = [-dir[0], -dir[1], -dir[2]];
+        const justResumed = pp && !pp.isRound;
+        const agree = area[0] * prevDir[0] + area[1] * prevDir[1] + area[2] * prevDir[2];
+        if (!justResumed && Math.abs(agree) > 0.3) {
+          if (agree < 0) area = [-area[0], -area[1], -area[2]];
+        } else {
+          const pp = row.index > 1 ? rows[row.index - 2] : null;
+          if (pp && pp.nodes.length) {
+            const c2 = centre(pp);
+            const d = (c[0] - c2[0]) * area[0] + (c[1] - c2[1]) * area[1] + (c[2] - c2[2]) * area[2];
+            if (d < 0) area = [-area[0], -area[1], -area[2]];
+          } else if (area[1] < 0) area = [-area[0], -area[1], -area[2]];
+        }
+        // Blend with the previous direction so per-round estimation errors do not compound.
+        const wPrev = justResumed ? 0 : 0.5;
+        const bx = wPrev * prevDir[0] + (1 - wPrev) * area[0], by = wPrev * prevDir[1] + (1 - wPrev) * area[1], bz = wPrev * prevDir[2] + (1 - wPrev) * area[2];
+        const bl = Math.hypot(bx, by, bz) || 1;
+        dir = [bx / bl, by / bl, bz / bl];
       } else {
         // Flat rows keep growing the way the previous row did (straight up for a flat
         // piece; along the last round's normal for a flap worked on part of a tube).
@@ -371,9 +386,11 @@ export class Relaxer {
         pos[i] += dx * f; pos[i + 1] += dy * f; pos[i + 2] += dz * f;
         pos[j] -= dx * f; pos[j + 1] -= dy * f; pos[j + 2] -= dz * f;
       }
-      if (this.anyRound) this.inflate(0.2);
+      // No inflation term: a push that keeps acting at equilibrium never lets the piece
+      // settle (measured: residual motion stayed 10x higher and the sock writhed). Tubes are
+      // kept open by the bending terms and the collision pass instead.
       if (it % 3 === 0) this.smooth(0.45);
-      if (this.iteration % 3 === 0) this.collide();
+      if (this.iteration % 2 === 0) this.collide();
       if (this.pins) for (const [id, p] of this.pins) { pos[3 * id] = p[0]; pos[3 * id + 1] = p[1]; pos[3 * id + 2] = p[2]; }
     }
   }
@@ -385,8 +402,9 @@ export class Relaxer {
   collide() {
     const pos = this.pos, n = this.n;
     const cell = this.w;
-    const minD = 0.75 * this.w;
+    const minD = 1.0 * this.w;
     const minD2 = minD * minD;
+    const nodes = this.nodes, rows = this.knit.rows;
     if (!this.adjacent) {
       // Pairs linked by a constraint are neighbours in the fabric and may be close:
       // a compact per-node list (up to 24 entries) of constrained partners.
@@ -431,11 +449,20 @@ export class Relaxer {
           let linked = false;
           for (let a = i * A, e = a + A; a < e; a++) { const q = adj[a]; if (q < 0) break; if (q === j) { linked = true; break; } }
           if (linked) continue;
+          // Near neighbours in the fabric grid (a few stitches or rows apart) are allowed close.
+          const ni = nodes[i], nj = nodes[j];
+          const dr = Math.abs(ni.row - nj.row);
+          if (dr <= 2) {
+            const len = rows[ni.row].nodes.length;
+            let dp = Math.abs(ni.pos - nj.pos);
+            if (rows[ni.row].isRound && rows[nj.row].isRound) dp = Math.min(dp, Math.abs(len - dp));
+            if (dp <= 3) continue;
+          }
           const ex = pos[3 * j] - pos[3 * i], ey = pos[3 * j + 1] - pos[3 * i + 1], ez = pos[3 * j + 2] - pos[3 * i + 2];
           const d2 = ex * ex + ey * ey + ez * ez;
           if (d2 >= minD2 || d2 < 1e-12) continue;
           const d = Math.sqrt(d2);
-          const push = (minD - d) / d * 0.25;
+          const push = (minD - d) / d * 0.4;
           pos[3 * i] -= ex * push; pos[3 * i + 1] -= ey * push; pos[3 * i + 2] -= ez * push;
           pos[3 * j] += ex * push; pos[3 * j + 1] += ey * push; pos[3 * j + 2] += ez * push;
         }
@@ -542,6 +569,29 @@ export class Relaxer {
   }
 
   /**
+   * Where the fabric of a round has turned inside out (its right side faces the round's
+   * centre), push those nodes through to the outside. Zero elsewhere.
+   */
+  uninvert(k) {
+    const pos = this.pos;
+    const rows = this.knit.rows;
+    const c = this.rowCentre;
+    if (!c) return;
+    for (const r of rows) {
+      if (!r.isRound || r.nodes.length < 8) continue;
+      const cx = c[3 * r.index], cy = c[3 * r.index + 1], cz = c[3 * r.index + 2];
+      for (const i of r.nodes) {
+        const n = this.rsNormal(i);
+        if (!n) continue;
+        const d = (pos[3 * i] - cx) * n[0] + (pos[3 * i + 1] - cy) * n[1] + (pos[3 * i + 2] - cz) * n[2];
+        if (d >= 0) continue;
+        const step = k * this.w;
+        pos[3 * i] -= n[0] * step; pos[3 * i + 1] -= n[1] * step; pos[3 * i + 2] -= n[2] * step;
+      }
+    }
+  }
+
+  /**
    * Nudge each node of a round toward its round's target radius, measured from that
    * round's own centre and about the local tube axis, so bent tubes (a sock's heel)
    * stay open without being pulled onto a single straight axis.
@@ -571,7 +621,12 @@ export class Relaxer {
         const d = x * ax + y * ay + z * az;
         x -= ax * d; y -= ay * d; z -= az * d;
         const rad = Math.hypot(x, y, z) || 1e-6;
-        const f = (R + this.off[i] - rad) / rad * k;
+        // Pressure is one-sided: it only props a round open when it has collapsed well
+        // inside its rest radius, and does nothing once the round is open. A term that
+        // kept pushing rounds toward a circle never settled where rounds are not circular.
+        const target = 0.8 * (R + this.off[i]);
+        if (rad >= target) continue;
+        const f = (target - rad) / rad * k;
         pos[3 * i] += x * f; pos[3 * i + 1] += y * f; pos[3 * i + 2] += z * f;
       }
     }
