@@ -411,3 +411,25 @@ Rnd 4: (k to marker, rm, k to marker) to marker, k to end.`);
   assert.match(warnings[1].message, /Rnd 4: the group .* ends at a different marker from the one that was ahead when it began/);
   assert.deepEqual(counts(r), [6, 6, 6, 6, 6]);
 });
+
+test('until there are N sts: progress by markers alone is not a stall', () => {
+  // The marker moves one stitch to the right each round; the count never changes, but the
+  // work does, so the loop must keep going until the marker reaches the edge and the round fails.
+  const p = parsePattern(`Cast on 4 sts.
+Join in the round.
+Rnd 1: k1, pm, k3.
+Rnd 2: k to marker, rm, k1, pm, k to end.
+Repeat rnd 2 until there are 5 sts.`);
+  assert.deepEqual(p.errors, []);
+  const r = knit(p, { stitchWidth: 4.5, rowHeight: 3.3 });
+  const errs = errors(r);
+  assert.equal(errs.length, 1);
+  assert.doesNotMatch(errs[0], /leaves the work exactly as it was/);
+  assert.ok(r.rows.length >= 5, `expected the marker to travel across the round, got ${r.rows.length} rows`);
+  // A pass that changes nothing at all is a stall.
+  const r2 = run(`Cast on 4 sts.
+Join in the round.
+Rnd 1: k to end.
+Repeat rnd 1 until there are 5 sts.`);
+  assert.match(errors(r2)[0], /leaves the work exactly as it was \(4 sts, markers in the same places\)/);
+});

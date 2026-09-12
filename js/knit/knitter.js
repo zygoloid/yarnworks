@@ -675,10 +675,16 @@ export class Knitter {
       const target = this.num(t.count, s.loc);
       let guard = 0;
       let last = this.stitchCount();
+      let lastState = this.needleState();
       while (this.stitchCount() !== target) {
         runOnce();
         const now = this.stitchCount();
-        if (now === last) throw new KnitError(`Repeating these rows does not change the stitch count (${now}), so "until there are ${target} sts" would never finish`, s.loc);
+        // The rows may make progress without changing the count (markers moved, stitches
+        // redistributed between them); only a pass that leaves the work exactly as it was
+        // can never finish.
+        const state = this.needleState();
+        if (state === lastState) throw new KnitError(`Repeating these rows leaves the work exactly as it was (${now} sts, markers in the same places), so "until there are ${target} sts" would never finish`, s.loc);
+        lastState = state;
         if ((last < target && now > target) || (last > target && now < target)) {
           this.message('problem', `Repeating these rows went from ${last} to ${now} sts, skipping over the ${target} sts the pattern asks for`, s.loc);
           break;
@@ -735,6 +741,8 @@ export class Knitter {
   /** Rows worked on the current piece (or the side of it in hand) since `fromCount` rows had been. */
   rowsWorked(fromCount = 0) { return this.rowCount - fromCount; }
   stitchCount() { return this.loopsOn(this.left) + this.loopsOn(this.right); }
+  /** The work as a knitter would see it between rows: which side faces, and the run of stitches and markers along the needle. */
+  needleState() { return `${this.side}:${this.right.concat(this.left).map((e) => (typeof e === 'number' ? 's' : 'm')).join('')}`; }
 
   doPlainRows(s) {
     const mk = (op, isRound) => ({ type: 'row', isRound, labels: null, andAll: null, side: null, instructions: [{ type: 'toTarget', op, mods: [], target: { kind: 'toEnd', leave: 0 }, loc: s.loc }], expectedCount: null, loc: s.loc });
