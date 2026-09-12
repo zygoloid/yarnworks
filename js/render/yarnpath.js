@@ -28,7 +28,7 @@ export class YarnPathBuilder {
     this.pos = pos;
     this.w = opts.stitchWidth;
     this.h = opts.rowHeight;
-    this.d = opts.yarnRadius * 1.1;
+    this.d = opts.yarnRadius * 1.3;
     this.frames = new Array(this.nodes.length);
     this.computeFrames();
   }
@@ -145,7 +145,7 @@ export class YarnPathBuilder {
         const nAvg = norm(add(pf.N, N));
         const zsum = (sPrev + s) / 2;
         const kindA = this.nodes[prevId].kind, kindB = node.kind;
-        const level = (kindA === 'sl' || kindB === 'sl') ? -0.45 : -0.55;
+        const level = (kindA === 'sl' || kindB === 'sl') ? -0.5 : -0.65;
         push(add(add(mid, scale(upAvg, level * h)), scale(nAvg, -zsum * d)), node, 0.0);
       } else if (prevNode && !row.castOn) {
         // Row turn. If the previous row ended with a wrap and turn, wrap the yarn around the
@@ -171,13 +171,19 @@ export class YarnPathBuilder {
 
       const headC = lerp(P, f.head, 0.55);
       const baseC = lerp(P, f.base, 0.4);
+      const up = (t) => lerp(P, f.head, t); // fraction of the way to the head target (next row)
+      const dn = (t) => lerp(P, f.base, t); // fraction of the way to the parent(s)
       switch (node.kind) {
         case 'yo': {
-          push(add(add(baseC, scale(C, -0.35 * w)), back), node, 0.1);
-          push(add(add(lerp(P, f.head, 0.2), scale(C, -0.25 * w)), back), node, 0.35);
-          push(add(headC, back), node, 0.5);
-          push(add(add(lerp(P, f.head, 0.2), scale(C, 0.25 * w)), back), node, 0.65);
-          push(add(add(baseC, scale(C, 0.35 * w)), back), node, 0.9);
+          // A strand over the needle: no legs, but the head must still be hooked by the
+          // stitch above, so its shoulders sit in front and its top behind that stitch's legs.
+          push(add(add(dn(0.35), scale(C, -0.45 * w)), front), node, 0.15);
+          push(add(add(up(0.5), scale(C, -0.42 * w)), front), node, 0.3);
+          push(add(add(up(0.78), scale(C, -0.28 * w)), back), node, 0.4);
+          push(add(up(0.88), back), node, 0.5);
+          push(add(add(up(0.78), scale(C, 0.28 * w)), back), node, 0.6);
+          push(add(add(up(0.5), scale(C, 0.42 * w)), front), node, 0.7);
+          push(add(add(dn(0.35), scale(C, 0.45 * w)), front), node, 0.85);
           break;
         }
         case 'sl': {
@@ -211,16 +217,23 @@ export class YarnPathBuilder {
           break;
         }
         default: {
-          // Knit or purl loop: legs converge at the base (where they emerge from the
-          // parent loop) and spread towards the head, which sits behind the next row.
-          const legSpread = node.parents.length > 1 ? 0.16 : 0.12;
-          push(add(add(baseC, scale(C, -legSpread * w)), front), node, 0.1);
-          push(add(add(lerp(P, f.head, 0.12), scale(C, -0.27 * w)), scale(N, s * d * 0.35)), node, 0.28);
-          push(add(add(headC, scale(C, -0.34 * w)), back), node, 0.4);
-          push(add(add(headC, scale(W, 0.1 * h)), back), node, 0.5);
-          push(add(add(headC, scale(C, 0.34 * w)), back), node, 0.6);
-          push(add(add(lerp(P, f.head, 0.12), scale(C, 0.27 * w)), scale(N, s * d * 0.35)), node, 0.72);
-          push(add(add(baseC, scale(C, legSpread * w)), front), node, 0.9);
+          // Knit or purl loop. Interlocking, as seen from the knit face: the sinker (trough)
+          // passes BEHIND the parent's V arms, the legs then come to the FRONT inside the
+          // parent's loop and cross in front of the parent's head top; this loop's own head
+          // has its shoulders in front (the tops of the V arms) and dips behind at the top,
+          // where the next row's legs cross over it.
+          const lb = node.parents.length > 1 ? 0.2 : 0.16;
+          push(add(add(dn(0.55), scale(C, -0.40 * w)), back), node, 0.06);   // behind the parent's arm
+          push(add(add(dn(0.42), scale(C, -lb * w)), front), node, 0.14);    // leg base, inside the parent loop
+          push(add(add(up(0.10), scale(C, -0.27 * w)), front), node, 0.28);  // leg
+          push(add(add(up(0.55), scale(C, -0.45 * w)), front), node, 0.38);  // shoulder
+          push(add(add(up(0.78), scale(C, -0.28 * w)), back), node, 0.44);   // head, dipping behind
+          push(add(up(0.88), back), node, 0.5);                          // head top
+          push(add(add(up(0.78), scale(C, 0.28 * w)), back), node, 0.56);
+          push(add(add(up(0.55), scale(C, 0.45 * w)), front), node, 0.62);
+          push(add(add(up(0.10), scale(C, 0.27 * w)), front), node, 0.72);
+          push(add(add(dn(0.42), scale(C, lb * w)), front), node, 0.86);
+          push(add(add(dn(0.55), scale(C, 0.40 * w)), back), node, 0.94);
           break;
         }
       }
