@@ -1,14 +1,31 @@
 // Yarn weights, gauge defaults, and colour models.
 
+// Typical gauge (per 10 cm / 4 in), needle size and ply construction for each weight.
 export const WEIGHTS = [
-  { id: 'lace', name: 'Lace', sts: 32, rows: 44, needle: 2.5 },
-  { id: 'fingering', name: 'Fingering / 4 ply', sts: 28, rows: 36, needle: 3.0 },
-  { id: 'sport', name: 'Sport / 5 ply', sts: 24, rows: 32, needle: 3.5 },
-  { id: 'dk', name: 'DK / 8 ply', sts: 22, rows: 30, needle: 4.0 },
-  { id: 'worsted', name: 'Worsted / Aran', sts: 18, rows: 24, needle: 5.0 },
-  { id: 'bulky', name: 'Bulky / Chunky', sts: 14, rows: 19, needle: 6.5 },
-  { id: 'super', name: 'Super bulky', sts: 10, rows: 14, needle: 9.0 },
+  { id: 'lace', name: 'Lace', sts: 32, rows: 44, needle: 2.5, plies: 2 },
+  { id: 'fingering', name: 'Fingering / sock', sts: 28, rows: 36, needle: 3.0, plies: 3 },
+  { id: 'sport', name: 'Sport', sts: 24, rows: 32, needle: 3.5, plies: 3 },
+  { id: 'dk', name: 'DK / light worsted', sts: 22, rows: 30, needle: 4.0, plies: 4 },
+  { id: 'worsted', name: 'Worsted / aran', sts: 18, rows: 24, needle: 5.0, plies: 4 },
+  { id: 'bulky', name: 'Bulky / chunky', sts: 14, rows: 19, needle: 6.5, plies: 3 },
+  { id: 'super', name: 'Super bulky', sts: 10, rows: 14, needle: 9.0, plies: 1 },
 ];
+
+// Standard needle sizes: millimetres and the US size name.
+export const NEEDLE_SIZES = [
+  [2.0, '0'], [2.25, '1'], [2.5, '1.5'], [2.75, '2'], [3.0, '2.5'], [3.25, '3'], [3.5, '4'], [3.75, '5'],
+  [4.0, '6'], [4.5, '7'], [5.0, '8'], [5.5, '9'], [6.0, '10'], [6.5, '10.5'], [7.0, '10.75'], [8.0, '11'],
+  [9.0, '13'], [10.0, '15'], [12.0, '17'], [15.0, '19'], [19.0, '35'], [25.0, '50'],
+];
+
+export function needleLabel(mm, units) {
+  const row = NEEDLE_SIZES.find((r) => Math.abs(r[0] - mm) < 0.01);
+  if (units === 'us') return row ? `US ${row[1]} (${mm} mm)` : `${mm} mm`;
+  return row ? `${mm} mm (US ${row[1]})` : `${mm} mm`;
+}
+
+export const CM_PER_IN = 2.54;
+export const YD_PER_M = 1.0936;
 
 export function weightById(id) { return WEIGHTS.find((w) => w.id === id) || WEIGHTS[3]; }
 

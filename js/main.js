@@ -6,7 +6,7 @@ import { Knitter } from './knit/knitter.js';
 import { Relaxer } from './sim/relax.js';
 import { YarnPathBuilder } from './render/yarnpath.js';
 import { KnitScene } from './render/scene.js';
-import { WEIGHTS, weightById, YarnColors } from './yarn.js';
+import { WEIGHTS, NEEDLE_SIZES, weightById, needleLabel, YarnColors, CM_PER_IN, YD_PER_M } from './yarn.js';
 import { EXAMPLES } from './examples.js';
 
 const $ = (id) => document.getElementById(id);
@@ -22,7 +22,8 @@ const state = {
   sizeIndex: 0,
   roundMode: 'auto',
   tension: 'normal',
-  plies: 3,
+  plies: 4,
+  units: 'metric',
   yarns: { A: { kind: 'solid', color: DEFAULT_COLORS.A, stripes: [{ color: '#b5443c', length: 60 }, { color: '#e8d9b5', length: 40 }] } },
   stop: null, // null = finished piece; else {row, stitch}
   lifelines: [],
@@ -53,6 +54,8 @@ function load() {
     const s = JSON.parse(raw);
     Object.assign(state, s);
     if (!state.yarns || !state.yarns.A) state.yarns = { A: { kind: 'solid', color: DEFAULT_COLORS.A, stripes: [] } };
+    if (!s.plies) state.plies = weightById(state.weight).plies;
+    if (!s.units) state.units = 'metric';
   } catch (e) { /* ignore */ }
 }
 
@@ -67,10 +70,14 @@ function initSettings() {
     weight.appendChild(o);
   }
   weight.value = state.weight;
-  $('needle').value = state.needle;
+  fillNeedleSelect();
   $('gauge-sts').value = state.sts;
   $('gauge-rows').value = state.rows;
   $('round').value = state.roundMode;
+  applyUnits();
+  for (const b of $('units').querySelectorAll('button')) {
+    b.addEventListener('click', () => { state.units = b.dataset.units; applyUnits(); renderYarnControls(); updatePositionUI(); save(); });
+  }
   $('tension').value = state.tension;
   $('plies').value = String(state.plies || 3);
   $('plies').addEventListener('change', () => { state.plies = parseInt($('plies').value, 10) || 3; scheduleUpdate(true, true); });
@@ -78,11 +85,15 @@ function initSettings() {
 
   weight.addEventListener('change', () => {
     const w = weightById(weight.value);
-    state.weight = w.id; state.needle = w.needle; state.sts = w.sts; state.rows = w.rows;
-    $('needle').value = w.needle; $('gauge-sts').value = w.sts; $('gauge-rows').value = w.rows;
+    state.weight = w.id; state.needle = w.needle; state.sts = w.sts; state.rows = w.rows; state.plies = w.plies;
+    fillNeedleSelect(); $('gauge-sts').value = w.sts; $('gauge-rows').value = w.rows; $('plies').value = String(w.plies);
     scheduleUpdate(true);
   });
-  for (const [id, key] of [['needle', 'needle'], ['gauge-sts', 'sts'], ['gauge-rows', 'rows']]) {
+  $('needle').addEventListener('change', () => {
+    const v = parseFloat($('needle').value);
+    if (Number.isFinite(v) && v > 0) { state.needle = v; scheduleUpdate(true); }
+  });
+  for (const [id, key] of [['gauge-sts', 'sts'], ['gauge-rows', 'rows']]) {
     $(id).addEventListener('change', () => {
       const v = parseFloat($(id).value);
       if (Number.isFinite(v) && v > 0) { state[key] = v; scheduleUpdate(true); }
@@ -158,6 +169,35 @@ function initSettings() {
   });
 }
 
+/** Needle sizes as a list, labelled for the current units; keeps a custom size if set. */
+function fillNeedleSelect() {
+  const sel = $('needle');
+  sel.innerHTML = '';
+  const sizes = NEEDLE_SIZES.map((r) => r[0]);
+  if (!sizes.some((mm) => Math.abs(mm - state.needle) < 0.01)) sizes.push(state.needle);
+  sizes.sort((a, b) => a - b);
+  for (const mm of sizes) {
+    const o = document.createElement('option');
+    o.value = String(mm);
+    o.textContent = needleLabel(mm, state.units);
+    sel.appendChild(o);
+  }
+  sel.value = String(state.needle);
+}
+
+/** Update unit-dependent labels. Gauge numbers follow knitting convention: per 10 cm and per 4 in are the same figure. */
+function applyUnits() {
+  const us = state.units === 'us';
+  $('gauge-sts-label').textContent = us ? 'Sts / 4 in' : 'Sts / 10 cm';
+  $('gauge-rows-label').textContent = us ? 'Rows / 4 in' : 'Rows / 10 cm';
+  for (const b of $('units').querySelectorAll('button')) b.classList.toggle('on', b.dataset.units === state.units);
+  fillNeedleSelect();
+}
+
+function lengthText(mm) {
+  return state.units === 'us' ? `${(mm / 1000 * YD_PER_M).toFixed(1)} yd` : `${(mm / 1000).toFixed(1)} m`;
+}
+
 function renderYarnControls() {
   const box = $('yarns');
   box.innerHTML = '';
@@ -199,10 +239,16 @@ function renderYarnControls() {
         c.type = 'color'; c.value = s.color;
         c.addEventListener('input', () => { s.color = c.value; scheduleUpdate(true, true); });
         const l = document.createElement('input');
-        l.type = 'number'; l.min = '1'; l.step = '5'; l.value = s.length;
-        l.addEventListener('change', () => { s.length = Math.max(1, parseFloat(l.value) || 1); scheduleUpdate(true, true); });
+        const us = state.units === 'us';
+        l.type = 'number'; l.min = '0.5'; l.step = us ? '1' : '5';
+        l.value = us ? (s.length / CM_PER_IN).toFixed(1).replace(/\.0$/, '') : s.length;
+        l.addEventListener('change', () => {
+          const v = Math.max(0.5, parseFloat(l.value) || 1);
+          s.length = us ? v * CM_PER_IN : v;
+          scheduleUpdate(true, true);
+        });
         const unit = document.createElement('span');
-        unit.className = 'unit'; unit.textContent = 'cm of yarn';
+        unit.className = 'unit'; unit.textContent = us ? 'in of yarn' : 'cm of yarn';
         const del = document.createElement('button');
         del.className = 'small'; del.textContent = '×'; del.title = 'Remove this colour';
         del.addEventListener('click', () => { y.stripes.splice(i, 1); renderYarnControls(); scheduleUpdate(true, true); });
@@ -359,7 +405,7 @@ function updatePositionUI() {
   if (state.stop === null) used = full.yarnLength;
   else if (s < total) used = full.nodes[row.nodes[s]].yarnStart;
   else used = r + 1 < full.rows.length && full.rows[r + 1].nodes.length ? full.nodes[full.rows[r + 1].nodes[0]].yarnStart : full.yarnLength;
-  $('yarn-readout').textContent = `Yarn used: ${(used / 1000).toFixed(1)} m`;
+  $('yarn-readout').textContent = `Yarn used: ${lengthText(used)}`;
 }
 
 function describeOp(node, row, s) {
@@ -456,7 +502,7 @@ function update(colorsOnly) {
   messages.push(...full.messages);
   if (messages.length === 0) {
     const rows = full.rows.length - 1;
-    messages.push({ severity: 'ok', message: `${rows} row${rows === 1 ? '' : 's'} knit, ${full.nodes.length} stitches, ${(full.yarnLength / 1000).toFixed(1)} m of yarn.${full.finished ? '' : ' The piece has not been bound off.'}`, loc: null });
+    messages.push({ severity: 'ok', message: `${rows} row${rows === 1 ? '' : 's'} knit, ${full.nodes.length} stitches, ${lengthText(full.yarnLength)} of yarn.${full.finished ? '' : ' The piece has not been bound off.'}`, loc: null });
   }
   messages.sort((a, b) => (a.loc ? a.loc.line : 1e9) - (b.loc ? b.loc.line : 1e9) || (a.severity === 'error' ? -1 : 1));
   showMessages(messages);

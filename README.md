@@ -36,8 +36,9 @@ npm test
 - **Position**: knit along with the virtual knitter. Step by row or by stitch
   (or use the arrow keys when the editor is not focused); the readout shows
   the row, the stitch count, the next instruction, and yarn used so far.
-- **Yarn & gauge**: pick a yarn weight (which fills in a typical gauge and
-  needle size), or set your own gauge. Choose the size for multi-size
+- **Yarn & gauge**: pick a yarn weight (which fills in a typical gauge,
+  needle size and ply count), or set your own. Metric / US switches gauge
+  labels, needle sizes, and lengths. Choose the size for multi-size
   patterns. Yarns can be solid or self-striping, with colours that change by
   length along the yarn; patterns that say `Change to B` get extra yarns.
 - **Markers & lifelines**: add a lifeline at the current row or a stitch

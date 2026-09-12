@@ -58,12 +58,17 @@
     </section>
 
     <section class="section">
-      <div class="section-head"><h2>Yarn &amp; gauge</h2></div>
+      <div class="section-head">
+        <h2>Yarn &amp; gauge</h2>
+        <div class="segmented" id="units" role="group" aria-label="Units">
+          <button type="button" data-units="metric" class="on">Metric</button><button type="button" data-units="us">US</button>
+        </div>
+      </div>
       <div class="grid2">
         <label>Weight <select id="weight"></select></label>
-        <label>Needle (mm) <input type="number" id="needle" step="0.25" min="1" max="25"></label>
-        <label>Sts / 10 cm <input type="number" id="gauge-sts" step="0.5" min="4" max="60"></label>
-        <label>Rows / 10 cm <input type="number" id="gauge-rows" step="0.5" min="4" max="80"></label>
+        <label>Needle <select id="needle"></select></label>
+        <label><span id="gauge-sts-label">Sts / 10 cm</span> <input type="number" id="gauge-sts" step="0.5" min="4" max="60"></label>
+        <label><span id="gauge-rows-label">Rows / 10 cm</span> <input type="number" id="gauge-rows" step="0.5" min="4" max="80"></label>
         <label>Size <select id="size"><option value="0">—</option></select></label>
         <label>Shape <select id="round">
           <option value="auto">As written</option>
