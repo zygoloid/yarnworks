@@ -67,6 +67,9 @@ Stitches: `k`, `p`, `k2tog`, `p2tog`, `ssk`, `k3tog`, `sk2p`, `s2kp`/`cdd`,
 `pm`, `sm`, `rm`, `w&t`, `turn`, `bo N`, `co N`, and multi-word forms such as
 `place marker`, `yarn over`, `knit into front and back`.
 
+Cables: `c4f`, `c6b`, `cable 4 front`, `2/2 RC`, `2/2 LC`, `2/1 RPC`,
+`2/1 LPC`, `LT`, `RT`.
+
 Repeats: `*…; rep from * to end`, `rep from * to last 3 sts`,
 `(k1, yo) 3 times`, `[k2tog] twice`, `k to end`, `p to last 2 sts`,
 `k to marker`, `k to 2 sts before marker`.
@@ -76,6 +79,19 @@ Sizes: numbers can be given per size as `12 (14, 16)`, `12 [14, 16]` or
 
 Checks: a stitch count at the end of a row, such as `(18 sts)` or `— 18 sts`,
 is verified. Lines starting with `#` or `//` are comments.
+
+## Development
+
+`tools/shot.mjs` loads the app in headless Chrome over the DevTools
+protocol, prints console output, optionally runs a script in the page, and
+saves a screenshot. It is handy for checking rendering changes:
+
+```
+node tools/shot.mjs http://localhost:8000/ shot.png --eval "yarnworks.scene.fit(true)"
+```
+
+The page exposes `window.yarnworks` (scene, state, knit results, positions,
+`setStop`) for this kind of scripting.
 
 ## How it works
 

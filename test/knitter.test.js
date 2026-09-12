@@ -197,3 +197,27 @@ Rnd 1: k.`, { inRound: false });
   assert.equal(r.inRound, false);
   assert.ok(r.messages.some((m) => m.severity === 'warning'));
 });
+
+test('cables cross stitches and set layers', () => {
+  const r = run(`Cast on 8 sts.
+Row 1: k2, c4f, k2.
+Row 2: p.
+Row 3: k2, 2/2 RC, k2.
+Row 4: p2, 2/1 LPC, p3.`);
+  assert.deepEqual(errors(r), []);
+  assert.deepEqual(counts(r), [8, 8, 8, 8, 8]);
+  const row1 = r.rows[1].nodes.map((id) => r.nodes[id]);
+  const co = r.rows[0].nodes;
+  // Row 1 is worked from the last cast-on stitch backwards. The cable takes co[5..2];
+  // c4f holds the first two (co[5], co[4]) in front and knits co[3], co[2] first.
+  assert.deepEqual(row1.slice(2, 6).map((n) => n.parents[0]), [co[3], co[2], co[5], co[4]]);
+  assert.deepEqual(row1.slice(2, 6).map((n) => n.layer), [-1, -1, 1, 1]);
+  const row3 = r.rows[3].nodes.map((id) => r.nodes[id]);
+  assert.deepEqual(row3.slice(2, 6).map((n) => n.layer), [1, 1, -1, -1]);
+  // 2/2 RC: the first two loops are held in back and worked second.
+  const row2 = r.rows[2].nodes;
+  assert.deepEqual(row3.slice(2, 6).map((n) => n.parents[0]), [row2[3], row2[2], row2[5], row2[4]]);
+  assert.deepEqual(row3.slice(2, 6).map((n) => n.cableShift), [-2, -2, 2, 2]);
+  const row4 = r.rows[4].nodes.map((id) => r.nodes[id]);
+  assert.deepEqual(row4.slice(2, 5).map((n) => [n.kind, n.layer]), [['p', -1], ['k', 1], ['k', 1]]);
+});

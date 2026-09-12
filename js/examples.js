@@ -52,6 +52,17 @@ Rnd 13: *k2tog; rep from * to end. 10 (12, 12) sts
 Bind off.`,
   },
   {
+    name: 'Cable panel',
+    text: `Cast on 22 sts.
+Row 1 (RS): p3, k4, p2, k8, p2, k3.
+Row 2 and all WS rows: k3, p8, k2, p4, k2, p3.
+Row 3: p3, c4f, p2, k8, p2, k3.
+Row 5: p3, k4, p2, c8b, p2, k3.
+Row 7: p3, c4f, p2, k8, p2, k3.
+Rows 9-24: repeat rows 1-8 twice.
+Bind off in pattern.`,
+  },
+  {
     name: 'Short-row wedge',
     text: `Cast on 16 sts.
 Row 1 (RS): k14, w&t.

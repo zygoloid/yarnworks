@@ -21,6 +21,7 @@ const state = {
   rows: 30,
   sizeIndex: 0,
   roundMode: 'auto',
+  tension: 'normal',
   yarns: { A: { kind: 'solid', color: DEFAULT_COLORS.A, stripes: [{ color: '#b5443c', length: 60 }, { color: '#e8d9b5', length: 40 }] } },
   stop: null, // null = finished piece; else {row, stitch}
   lifelines: [],
@@ -35,6 +36,7 @@ let parsed = null;
 let prevPositions = null; // Map id -> [x,y,z] for warm starts
 let prevKey = null;       // what the warm start positions belong to
 let pathBuilder = null;
+let lastPositions = null;
 let debounceTimer = null;
 
 // ---------------------------------------------------------------------------
@@ -68,6 +70,8 @@ function initSettings() {
   $('gauge-sts').value = state.sts;
   $('gauge-rows').value = state.rows;
   $('round').value = state.roundMode;
+  $('tension').value = state.tension;
+  $('tension').addEventListener('change', () => { state.tension = $('tension').value; scheduleUpdate(true); });
 
   weight.addEventListener('change', () => {
     const w = weightById(weight.value);
@@ -332,7 +336,9 @@ function updatePositionUI() {
   }
   const total = row.nodes.length;
   let st;
-  if (s >= total) {
+  if (s >= total && !row.complete && full.stopped) {
+    st = `Knitting stopped here after ${total} stitch${total === 1 ? '' : 'es'} because of the error above.`;
+  } else if (s >= total) {
     st = state.stop === null && full.finished ? 'Finished and bound off.' : `Row complete (${total} stitch${total === 1 ? '' : 'es'} worked).`;
     if (r < full.rows.length - 1 && state.stop !== null) st += ` Next: ${full.rows[r + 1].label}.`;
   } else {
@@ -449,6 +455,7 @@ function update(colorsOnly) {
     const rows = full.rows.length - 1;
     messages.push({ severity: 'ok', message: `${rows} row${rows === 1 ? '' : 's'} knit, ${full.nodes.length} stitches, ${(full.yarnLength / 1000).toFixed(1)} m of yarn.${full.finished ? '' : ' The piece has not been bound off.'}`, loc: null });
   }
+  messages.sort((a, b) => (a.loc ? a.loc.line : 1e9) - (b.loc ? b.loc.line : 1e9) || (a.severity === 'error' ? -1 : 1));
   showMessages(messages);
   renderYarnControls();
 
@@ -470,7 +477,8 @@ function rebuildScene() {
   scene.clear();
   if (!view || view.nodes.length === 0) return;
   const w = 100 / state.sts, h = 100 / state.rows;
-  const yarnRadius = w * 0.21;
+  // Tension: at a fixed gauge, tighter knitting means the yarn fills more of each stitch.
+  const yarnRadius = w * ({ loose: 0.17, normal: 0.21, tight: 0.25 }[state.tension] || 0.21);
 
   // Relax positions (warm start from the previous layout so knitting along feels stable,
   // but only if the pattern and settings are unchanged so node ids still mean the same thing).
@@ -482,6 +490,7 @@ function rebuildScene() {
   const pos = relaxer.finish();
   prevPositions = new Map();
   for (let i = 0; i < view.nodes.length; i++) prevPositions.set(i, [pos[3 * i], pos[3 * i + 1], pos[3 * i + 2]]);
+  lastPositions = pos;
 
   pathBuilder = new YarnPathBuilder(view, pos, { stitchWidth: w, rowHeight: h, yarnRadius });
   const path = pathBuilder.build();
@@ -559,4 +568,4 @@ renderHelpers();
 update(false);
 
 // Debug handle (used by tools/shot.mjs and handy in the console).
-window.yarnworks = { scene, state, update, get full() { return full; }, get view() { return view; }, setStop };
+window.yarnworks = { scene, state, update, get full() { return full; }, get view() { return view; }, get positions() { return lastPositions; }, setStop };

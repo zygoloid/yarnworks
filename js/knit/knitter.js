@@ -93,6 +93,7 @@ export class Knitter {
       op: props.op || props.kind,
       mods: props.mods || [],
       lean: props.lean || null,  // 'left' | 'right' | 'center' for decreases
+      layer: props.layer || 0,   // +1 for stitches crossing in front (cables), -1 behind
       bar: props.bar || null,    // [a, b] loops that an m1 was lifted between
       passedOver: null,          // id of node this loop was passed over (bind off / psso)
       wrapped: false,
@@ -609,6 +610,7 @@ export class Knitter {
   executeItem(item) {
     switch (item.type) {
       case 'stitch': return this.doStitch(item);
+      case 'cable': return this.doCable(item);
       case 'toTarget': return this.doToTarget(item);
       case 'group': return this.doRepeat(item.body, item.times, item.loc, 'group');
       case 'star': return this.doRepeat(item.body, item.times, item.loc, 'repeat');
@@ -620,6 +622,7 @@ export class Knitter {
   staticConsumption(items) {
     let total = 0;
     for (const it of items) {
+      if (it.type === 'cable') { total += it.top + it.under; continue; }
       if (it.type === 'stitch') {
         const op = OPS[it.op];
         if (it.op === 'bo') return null;
@@ -640,6 +643,7 @@ export class Knitter {
 
   describeItems(items) {
     return items.map((it) => {
+      if (it.type === 'cable') return `${it.top}/${it.under} ${it.dir === 'left' ? 'LC' : 'RC'}`;
       if (it.type === 'stitch') return it.op + (it.count === null || it.count === 'all' ? '' : this.num(it.count, it.loc));
       if (it.type === 'toTarget') return `${it.op} to ...`;
       return '(...)';
@@ -839,6 +843,35 @@ export class Knitter {
       default:
         throw this.err(`The instruction "${op}" is not supported yet`, loc);
     }
+  }
+
+  /**
+   * A cable cross. Left cross: hold `top` stitches in front, work `under`, then the held
+   * stitches. Right cross: hold `under` in back, work `top`, then the held stitches.
+   * Either way the `top` group ends up crossing in front of the `under` group.
+   */
+  doCable(item) {
+    const { top, under, dir, purlUnder, loc } = item;
+    const total = top + under;
+    const name = `${top}/${under} ${dir === 'left' ? 'LC' : 'RC'}`;
+    const loops = this.take(total, name, loc);
+    const face = (op) => this.faceFor(op);
+    // Work order: [parent index, kind, layer] for each new stitch. The first stitches on
+    // the left needle are slipped to the cable needle and worked second; for a left cross
+    // that is the `top` group (held in front), for a right cross the `under` group (held in back).
+    const order = [];
+    if (dir === 'left') {
+      for (let j = top; j < total; j++) order.push([j, purlUnder ? 'p' : 'k', -1]);
+      for (let j = 0; j < top; j++) order.push([j, 'k', 1]);
+    } else {
+      for (let j = under; j < total; j++) order.push([j, 'k', 1]);
+      for (let j = 0; j < under; j++) order.push([j, purlUnder ? 'p' : 'k', -1]);
+    }
+    order.forEach(([j, kind, layer], i) => {
+      const node = this.newNode({ kind, op: name, face: face(kind), parents: [loops[j]], layer, loc });
+      node.cableShift = i - j; // columns moved along the knitting direction
+      this.put(node);
+    });
   }
 
   stitchesToMarker() {

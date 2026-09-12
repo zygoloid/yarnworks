@@ -78,8 +78,23 @@ export class Relaxer {
           x = 0; y = node.row * h; z = 0;
         }
       }
+      if (node.cableShift) {
+        const dir = this.courseDir(node.pos > 0 ? row.nodes[node.pos - 1] : i);
+        x += dir[0] * node.cableShift * w; y += dir[1] * node.cableShift * w; z += dir[2] * node.cableShift * w;
+      }
+      if (node.layer) {
+        // Crossed stitches start in front of / behind the fabric surface.
+        const nrm = this.normalAt(x, y, z, node);
+        x += nrm[0] * node.layer * this.h * 0.4; y += nrm[1] * node.layer * this.h * 0.4; z += nrm[2] * node.layer * this.h * 0.4;
+      }
       this.set(i, x + jitter(), y + jitter(), z + jitter());
     }
+  }
+
+  /** Outward normal of the fabric at a point (the right side faces +z when flat, outward when round). */
+  normalAt(x, y, z, node) {
+    if (this.inRound) { const r = Math.hypot(x, z) || 1; return [x / r, 0, z / r]; }
+    return [0, 0, 1];
   }
 
   /** Approximate knitting direction at node `id` from its row's neighbours or side. */
@@ -126,16 +141,19 @@ export class Relaxer {
           const parent = nodes[p];
           const nc = parent.children.length;
           const ci = parent.children.indexOf(id);
-          const dx = ((ci - (nc - 1) / 2) - (pi - (np - 1) / 2) * 1) * w;
-          const rest = node.kind === 'sl' ? Math.hypot(h, dx) : Math.hypot(h, dx);
-          this.addC(id, p, rest, 1.0);
-          // Diagonals to the parent's course neighbours.
+          // Horizontal offset between this stitch and its parent, in stitch widths:
+          // from increases/decreases, plus any cable crossing.
+          const shift = (ci - (nc - 1) / 2) - (pi - (np - 1) / 2) + (node.cableShift || 0);
+          const dx = shift * w;
+          this.addC(id, p, Math.hypot(h, dx), 1.0);
+          // Diagonals to the parent's course neighbours (which are one column further along).
           const prow = rows[parent.row];
           const pk = parent.pos;
-          if (pk > 0) this.addC(id, prow.nodes[pk - 1], diag, 0.4);
-          if (pk + 1 < prow.nodes.length) this.addC(id, prow.nodes[pk + 1], diag, 0.4);
+          const sameDir = row.isRound || prow.side === row.side ? 1 : -1; // parent row worked in the same direction?
+          if (pk > 0) this.addC(id, prow.nodes[pk - 1], Math.hypot(h, dx + sameDir * w * 1), 0.4);
+          if (pk + 1 < prow.nodes.length) this.addC(id, prow.nodes[pk + 1], Math.hypot(h, dx - sameDir * w * 1), 0.4);
           // Bending along the wale.
-          if (parent.parents.length) this.addC(id, parent.parents[0], 2 * h, 0.3);
+          if (parent.parents.length) this.addC(id, parent.parents[0], Math.hypot(2 * h, dx), 0.3);
         }
         if (node.bar) {
           for (const b of node.bar) if (b !== null) this.addC(id, b, Math.hypot(h, w / 2), 0.8);
@@ -201,6 +219,7 @@ export class Relaxer {
     for (let i = 0; i < this.n; i++) {
       const list = this.nbr[i];
       if (!list || list.length < 3) continue;
+      if (this.nodes[i].layer) continue;
       let ax = 0, ay = 0, az = 0;
       for (const j of list) { ax += pos[3 * j]; ay += pos[3 * j + 1]; az += pos[3 * j + 2]; }
       ax /= list.length; ay /= list.length; az /= list.length;

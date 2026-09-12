@@ -41,6 +41,7 @@ export const OPS = {
   co:    { consumes: 0, produces: 1, name: 'cast on' },
   turn:  { consumes: 0, produces: 0, name: 'turn' },
   wt:    { consumes: 0, produces: 0, name: 'wrap and turn' },
+  cable: { consumes: 0, produces: 0, name: 'cable' }, // consumes/produces come from the cable's own counts
 };
 
 // Aliases: word -> canonical op (plus optional implied modifiers/count).
@@ -606,10 +607,46 @@ export class Parser {
         expectedCount = this.tryStitchCount(cur);
         continue;
       }
+      const cable = this.tryCable(cur);
+      if (cable) { items.push(cable); continue; }
       const item = this.parseItem(cur, context);
       if (item) items.push(item);
     }
     return { items, expectedCount };
+  }
+
+  /**
+   * Cable crosses: "c4f", "c6b", "cable 4 front", "2/2 RC", "2/1 LPC", "LT", "RT".
+   * Returns {type:'cable', top, under, front, purlUnder} — `top` stitches lie on top
+   * of `under` stitches; `front` says whether the held stitches sit in front.
+   */
+  tryCable(cur) {
+    const first = cur.peek();
+    const make = (top, under, dir, purlUnder) => {
+      // Left cross: hold `top` in front, work `under`, then the held. Right cross: hold `under` in back, work `top`, then held.
+      return { type: 'cable', top, under, dir, purlUnder, loc: cur.loc(first) };
+    };
+    if (first.type === 'num' && cur.isPunct('/', 1) && cur.isNum(2) && cur.peek(3).type === 'word' && /^[lr]p?c$/.test(cur.peek(3).value)) {
+      const a = cur.next().value; cur.next(); const b = cur.next().value; const kind = cur.next().value;
+      const dir = kind[0] === 'l' ? 'left' : 'right';
+      return make(a, b, dir, kind.length === 3);
+    }
+    if (first.type === 'word') {
+      let m = /^c(\d+)([fb])$/.exec(first.value);
+      if (m) {
+        cur.next();
+        const n = parseInt(m[1], 10);
+        if (n % 2 !== 0 || n < 2) throw cur.error(`Cable "${first.text}" should cross an even number of stitches`, first);
+        return make(n / 2, n / 2, m[2] === 'f' ? 'left' : 'right', false);
+      }
+      if (first.value === 'cable' && cur.isNum(1) && cur.isWord(['front', 'back', 'f', 'b'], 2)) {
+        cur.next(); const n = cur.next().value; const side = cur.next().value;
+        if (n % 2 !== 0 || n < 2) throw cur.error(`A cable should cross an even number of stitches`, first);
+        return make(n / 2, n / 2, side[0] === 'f' ? 'left' : 'right', false);
+      }
+      if (first.value === 'lt' || first.value === 'rt') { cur.next(); return make(1, 1, first.value === 'lt' ? 'left' : 'right', false); }
+    }
+    return null;
   }
 
   looksLikeStitchCount(cur, offset, close) {

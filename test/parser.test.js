@@ -179,3 +179,13 @@ test('unknown line', () => {
   assert.equal(r.errors.length, 1);
   assert.match(r.errors[0].message, /don't understand this line/);
 });
+
+test('cable notation', () => {
+  const s = parseOne('Row 3: p2, c4f, k1, cable 6 back, 2/2 RC, 2/1 LPC, LT, p2');
+  const cables = s.instructions.filter((i) => i.type === 'cable');
+  assert.deepEqual(cables.map((c) => [c.top, c.under, c.dir, c.purlUnder]), [
+    [2, 2, 'left', false], [3, 3, 'right', false], [2, 2, 'right', false], [2, 1, 'left', true], [1, 1, 'left', false],
+  ]);
+  const r = parsePattern('Row 1: c3f');
+  assert.match(r.errors[0].message, /even number/);
+});

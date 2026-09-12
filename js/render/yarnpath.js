@@ -80,7 +80,7 @@ export class YarnPathBuilder {
   }
 
   frameFor(node) {
-    const P = this.P(node.id);
+    let P = this.P(node.id);
     const head = this.headTarget(node);
     const base = this.baseTarget(node);
     let W = norm(sub(head, base));
@@ -97,6 +97,7 @@ export class YarnPathBuilder {
     C = norm(C);
     const rs = this.rows[node.row].side === 'rs';
     const N = norm(rs ? cross(W, C) : cross(C, W));
+    if (node.layer) P = add(P, scale(N, node.layer * this.d * 1.2));
     return { P, W, C, N, head, base };
   }
 
