@@ -98,6 +98,7 @@ function initSettings() {
     state.text = EXAMPLES[parseInt(example.value, 10)].text;
     $('pattern').value = state.text;
     state.stop = null; state.lifelines = []; state.markers = [];
+    scene.fitted = false;
     scheduleUpdate(true);
   });
 

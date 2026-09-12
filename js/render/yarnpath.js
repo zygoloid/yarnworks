@@ -147,10 +147,25 @@ export class YarnPathBuilder {
         const level = (kindA === 'sl' || kindB === 'sl') ? -0.45 : -0.55;
         push(add(add(mid, scale(upAvg, level * h)), scale(nAvg, -zsum * d)), node, 0.0);
       } else if (prevNode && !row.castOn) {
-        // Row turn: the yarn climbs the selvedge. Add a point just below this stitch's first leg.
-        const pf = this.frames[prevNode.id];
-        const mid = lerp(pf.P, P, 0.5);
-        push(add(mid, scale(N, -s * d * 0.5)), node, 0.0);
+        // Row turn. If the previous row ended with a wrap and turn, wrap the yarn around the
+        // base of the stitch that was left unworked before climbing to this row.
+        const wrappedId = this.wrapTargetAfter(prevNode);
+        if (wrappedId !== null) {
+          const wf = this.frames[wrappedId];
+          const base = lerp(wf.P, wf.base, 0.3);
+          const pf = this.frames[prevNode.id];
+          const sideSign = this.nodes[wrappedId].face === 'p' ? -1 : 1;
+          push(add(add(base, scale(wf.C, -0.35 * w)), scale(wf.N, -sideSign * 1.4 * d)), node, 0.0);
+          push(add(add(base, scale(wf.C, 0.35 * w)), scale(wf.N, -sideSign * 1.4 * d)), node, 0.0);
+          push(add(add(base, scale(wf.C, 0.35 * w)), scale(wf.N, sideSign * 1.4 * d)), node, 0.0);
+          push(add(add(base, scale(wf.C, -0.35 * w)), scale(wf.N, sideSign * 1.4 * d)), node, 0.0);
+          void pf;
+        } else {
+          // The yarn climbs the selvedge. Add a point just below this stitch's first leg.
+          const pf = this.frames[prevNode.id];
+          const mid = lerp(pf.P, P, 0.5);
+          push(add(mid, scale(N, -s * d * 0.5)), node, 0.0);
+        }
       }
 
       const headC = lerp(P, f.head, 0.55);
@@ -217,6 +232,22 @@ export class YarnPathBuilder {
       node: new Int32Array(nodeAt),
       strands: strands.filter((s) => s.end - s.start >= 2),
     };
+  }
+
+  /** If the row containing `node` ended with a wrap and turn right after it, the wrapped node's id. */
+  wrapTargetAfter(node) {
+    const row = this.rows[node.row];
+    if (!row.short || node.pos !== row.nodes.length - 1) return null;
+    // The wrapped stitch is the one that would have been worked next: find a wrapped node
+    // adjacent in the row below (the parent's course neighbour beyond this stitch).
+    const parent = node.parents.length ? this.nodes[node.parents[0]] : null;
+    if (!parent) return null;
+    const prow = this.rows[parent.row];
+    const dir = prow.side === row.side ? 1 : -1; // same knitting direction as the parent row?
+    const candidates = [prow.nodes[parent.pos + 1], prow.nodes[parent.pos - 1]].filter((x) => x !== undefined);
+    for (const c of candidates) if (this.nodes[c].wrapped) return c;
+    void dir;
+    return null;
   }
 
   /** Centre of a node's head loop (where a needle or lifeline would pass). */

@@ -24,7 +24,7 @@ export function hexToRgb(hex) {
 /**
  * A yarn colour model.
  *  - {kind:'solid', color}
- *  - {kind:'stripes', segments:[{color, length}], unit: 'cm'} — self-striping: colour by length along the yarn.
+ *  - {kind:'stripes', stripes:[{color, length in cm}]} — self-striping: colour by length along the yarn.
  */
 export class YarnColors {
   /**
@@ -44,8 +44,8 @@ export class YarnColors {
 }
 
 function compile(model) {
-  if (model.kind === 'stripes' && model.segments && model.segments.length) {
-    const segs = model.segments.map((s) => ({ rgb: hexToRgb(s.color), len: Math.max(1, (s.length || 0) * 10) }));
+  if (model.kind === 'stripes' && model.stripes && model.stripes.length) {
+    const segs = model.stripes.map((s) => ({ rgb: hexToRgb(s.color), len: Math.max(1, (s.length || 0) * 10) }));
     const total = segs.reduce((a, s) => a + s.len, 0);
     return (l) => {
       let t = ((l % total) + total) % total;
