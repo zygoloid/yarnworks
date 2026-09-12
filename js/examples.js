@@ -68,7 +68,7 @@ Bind off.`,
   },
   {
     name: 'Plain sock (3 sizes)',
-    text: `# A plain cuff-down sock of our own: a k2p1 cuff, a slipped-stitch heel flap worked flat
+    text: `# A plain cuff-down sock: a k2p1 cuff, a slipped-stitch heel flap worked flat
 # over half the stitches, a turned heel, gusset decreases, and a grafted toe, with a
 # contrast colour at the cuff, heel and toe. The leg and foot are short so it knits
 # quickly; lengthen them to taste.
