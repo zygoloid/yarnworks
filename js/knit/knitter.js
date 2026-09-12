@@ -10,6 +10,8 @@ import { PatternError } from '../pattern/lexer.js';
 
 export class KnitError extends PatternError {}
 
+class StopSignal extends Error {}
+
 /** Yarn used per stitch, as a multiple of the stitch width. */
 const YARN_FACTOR = { k: 2.5, p: 2.5, yo: 1.4, sl: 1.0, m1: 2.0, co: 2.0, bo: 2.5 };
 
@@ -26,6 +28,12 @@ export class Knitter {
     this.stitchWidth = opts.stitchWidth || 4.5;
     this.rowHeight = opts.rowHeight || 3.3;
     this.inRoundOverride = opts.inRound === undefined ? null : opts.inRound;
+    // Optional stop point: {row, stitch} — stop after `stitch` stitches of row index `row`
+    // (stitch === null means stop at the end of that row).
+    this.stopAt = opts.stopAt || null;
+    this.reachedStop = false;
+    // User-placed markers: [{row, stitch}] — placed after `stitch` stitches of row index `row`.
+    this.userMarkers = opts.markers || [];
 
     this.nodes = [];
     this.rows = [];
@@ -96,7 +104,15 @@ export class Knitter {
     this.yarnLength += yarn;
     this.nodes.push(node);
     for (const p of node.parents) this.nodes[p].children.push(id);
-    if (this.currentRow) this.currentRow.nodes.push(id);
+    if (this.currentRow) {
+      this.currentRow.nodes.push(id);
+      for (const m of this.userMarkers) {
+        if (m.row === this.currentRow.index && m.stitch === this.currentRow.nodes.length) this.right.push({ marker: true, name: 'user' });
+      }
+    }
+    if (this.stopAt && this.currentRow && this.stopAt.stitch !== null && this.currentRow.index === this.stopAt.row && this.currentRow.nodes.length >= this.stopAt.stitch) {
+      throw new StopSignal();
+    }
     return node;
   }
 
@@ -137,7 +153,10 @@ export class Knitter {
         this.message('error', 'The pattern does not cast on any stitches. Start with e.g. "Cast on 20 sts".', null);
       }
     } catch (e) {
-      if (e instanceof PatternError) {
+      if (e instanceof StopSignal) {
+        this.reachedStop = true;
+        if (this.currentRow && !this.currentRow.complete) this.finishRow(true);
+      } else if (e instanceof PatternError) {
         this.message('error', e.message, e.loc);
         this.stopped = true;
         if (this.currentRow && !this.currentRow.complete) this.finishRow(true);
@@ -156,6 +175,9 @@ export class Knitter {
       inRound: this.inRound,
       yarnLength: this.yarnLength,
       stopped: this.stopped,
+      reachedStop: this.reachedStop,
+      finished: !!this.finished,
+      side: this.side,
       stitchWidth: this.stitchWidth,
       rowHeight: this.rowHeight,
       // Final needle state, for rendering when the piece is shown complete.
@@ -229,6 +251,7 @@ export class Knitter {
   startRow(label, loc, isRound, isCastOn = false) {
     if (!this.castOn) throw new KnitError(`${label}: cast on some stitches first (e.g. "Cast on 20 sts")`, loc);
     if (this.currentRow) this.finishRow(false);
+    if (this.stopAt && this.rows.length > this.stopAt.row) throw new StopSignal();
     // Turn the work (or continue around) so the stitches to work are on the left needle.
     if (!isCastOn) this.beginRowNeedles();
     const row = {
@@ -342,7 +365,7 @@ export class Knitter {
   }
 
   /** Execute one row statement as one row. */
-  executeRowStatement(s, label) {
+  executeRowStatement(s, label, isRepeat = false) {
     if (s.isRound && !this.inRound) {
       if (this.inRoundOverride === false) {
         this.message('warning', 'This is a round but "knit flat" is selected; working it as a row', s.loc);
@@ -372,7 +395,7 @@ export class Knitter {
     row.stmt = s;
     row.patternLabel = label !== undefined ? label : null;
     this.executeItems(s.instructions);
-    this.endOfRow(s);
+    this.endOfRow(s, isRepeat);
   }
 
   upcomingSide() {
@@ -381,7 +404,7 @@ export class Knitter {
     return this.side === 'rs' ? 'ws' : 'rs';
   }
 
-  endOfRow(s) {
+  endOfRow(s, isRepeat = false) {
     const row = this.currentRow;
     if (row.turned) {
       // Short row: the row ended at a turn.
@@ -391,14 +414,18 @@ export class Knitter {
         throw this.err(`${rem} stitch${rem === 1 ? ' is' : 'es are'} left unworked at the end of the row (the instructions only use ${row.stitchesBefore - rem} of ${row.stitchesBefore})`, s.loc);
       }
     }
-    if (s.expectedCount !== null && s.expectedCount !== undefined) {
-      const expected = this.num(s.expectedCount, s.loc);
-      const actual = this.loopsOn(this.right) + this.loopsOn(this.left);
-      if (expected !== actual) {
-        this.message('problem', `${row.label}: the pattern says there should be ${expected} sts but there are ${actual}`, s.loc);
-      }
-    }
+    // A stitch count noted on a row applies when the row is first worked, not on later repeats.
+    if (!isRepeat) this.checkCount(s.expectedCount, s.loc, row.label);
     this.finishRow(false);
+  }
+
+  checkCount(expectedCount, loc, label) {
+    if (expectedCount === null || expectedCount === undefined) return;
+    const expected = this.num(expectedCount, loc);
+    const actual = this.loopsOn(this.right) + this.loopsOn(this.left);
+    if (expected !== actual) {
+      this.message('problem', `${label}: the pattern says there should be ${expected} sts but there are ${actual}`, loc);
+    }
   }
 
   // -- Repeats of rows ----------------------------------------------------------
@@ -431,6 +458,14 @@ export class Knitter {
 
   /** Execute a "repeat rows" statement. `labelled` is the statement when it carries row labels. */
   doRepeatRows(s, labelled) {
+    this.doRepeatRowsInner(s, labelled);
+    if (s.expectedCount !== null && s.expectedCount !== undefined) {
+      const label = labelled && labelled.labels ? (labelled.labels.from !== undefined ? `Rows ${labelled.labels.from}-${labelled.labels.to}` : `Row ${labelled.labels.list[0]}`) : 'After the repeat';
+      this.checkCount(s.expectedCount, s.loc, label);
+    }
+  }
+
+  doRepeatRowsInner(s, labelled) {
     const stmts = this.resolveRowRef(s.ref, s.loc);
     let nextLabel = labelled && labelled.labels && labelled.labels.from !== undefined ? labelled.labels.from : null;
     const runOnce = () => {
@@ -439,7 +474,7 @@ export class Knitter {
         else {
           let label = st.labels && st.labels.list ? st.labels.list[0] : st.labels && st.labels.from !== undefined ? st.labels.from : undefined;
           if (nextLabel !== null) label = nextLabel++;
-          this.executeRowStatement(st, label);
+          this.executeRowStatement(st, label, true);
         }
       }
     };
@@ -512,7 +547,7 @@ export class Knitter {
     while (this.lastRowSide() !== side) {
       const st = stmts[i % stmts.length];
       if (st.type === 'repeatRows') this.doRepeatRows(st, st);
-      else this.executeRowStatement(st, st.labels && st.labels.list ? st.labels.list[0] : undefined);
+      else this.executeRowStatement(st, st.labels && st.labels.list ? st.labels.list[0] : undefined, true);
       i++;
       if (++guard > 4) throw new KnitError(`Could not end with a ${side.toUpperCase()} row`, loc);
     }

@@ -374,8 +374,14 @@ export class Parser {
       ref = this.parseLabels(cur);
     }
     const times = this.parseTimes(cur, stmt);
-    while (!cur.atEnd()) cur.next(); // ignore trailing notes
-    const out = { type: 'repeatRows', ref, times, loc: cur.loc(first) };
+    // Trailing notes, possibly including a stitch count: "(16 sts)", "— 16 sts".
+    let expectedCount = null;
+    while (!cur.atEnd()) {
+      if (cur.isPunct(['(', '[']) && this.looksLikeStitchCount(cur, 1, null)) { cur.next(); expectedCount = this.tryStitchCount(cur); continue; }
+      if (this.looksLikeStitchCount(cur, 0, null)) { expectedCount = this.tryStitchCount(cur); continue; }
+      cur.next();
+    }
+    const out = { type: 'repeatRows', ref, times, expectedCount, loc: cur.loc(first) };
     if (stmt) { out.labels = stmt.labels; out.isRound = stmt.isRound; out.loc = stmt.loc; }
     return out;
   }
