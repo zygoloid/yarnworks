@@ -202,6 +202,17 @@ export class KnitScene {
     this.needsRender = true;
   }
 
+  /** View the piece upside down (a cuff-down sock reads better with the cuff at the top). */
+  turnOver() {
+    this.camera.up.y = -this.camera.up.y;
+    const t = this.controls.target.clone();
+    const offset = this.camera.position.clone().sub(t);
+    offset.y = -offset.y;
+    this.camera.position.copy(t).add(offset);
+    this.controls.update();
+    this.needsRender = true;
+  }
+
   flip() {
     const t = this.controls.target.clone();
     const offset = this.camera.position.clone().sub(t);

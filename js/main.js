@@ -39,6 +39,7 @@ let prevPositions = null; // Map id -> [x,y,z] for warm starts
 let prevKey = null;       // what the warm start positions belong to
 let pathBuilder = null;
 let lastPositions = null;
+let appliedGauge = null;
 let debounceTimer = null;
 
 // ---------------------------------------------------------------------------
@@ -133,6 +134,7 @@ function initSettings() {
   $('show-needles').addEventListener('change', () => { state.showNeedles = $('show-needles').checked; scene.setNeedlesVisible(state.showNeedles); save(); });
   $('fit').addEventListener('click', () => scene.fit(true));
   $('flip').addEventListener('click', () => scene.flip());
+  $('upside').addEventListener('click', () => scene.turnOver());
 
   // Position controls.
   $('row-slider').addEventListener('input', () => { setStop(parseInt($('row-slider').value, 10), null); });
@@ -371,7 +373,8 @@ function updatePositionUI() {
   else {
     const label = row.label === `Row ${r}` || row.label === `Rnd ${r}` ? '' : ` · ${row.label}`;
     const sts = row.stitchesBefore === row.stitchesAfter ? `${row.stitchesAfter} sts` : `${row.stitchesBefore} → ${row.stitchesAfter} sts`;
-    text = `${row.isRound ? 'Round' : 'Row'} ${r} of ${workRows}${label} (${side}) · ${sts}`;
+    const section = row.section ? `${row.section} · ` : '';
+    text = `${section}${row.isRound ? 'Round' : 'Row'} ${r} of ${workRows}${label} (${side}) · ${sts}`;
   }
   $('row-readout').textContent = text;
   // The pattern line this row comes from.
@@ -498,6 +501,19 @@ function update(colorsOnly) {
   sizeSel.value = String(state.sizeIndex);
   sizeSel.disabled = nSizes <= 1;
 
+  // A gauge stated in the pattern sets the gauge inputs (once per pattern text).
+  const gaugeStmt = parsed.statements.find((st) => st.type === 'gauge');
+  if (gaugeStmt) {
+    const key = `${gaugeStmt.sts}/${gaugeStmt.rows}`;
+    if (appliedGauge !== key) {
+      appliedGauge = key;
+      state.sts = gaugeStmt.sts;
+      state.rows = gaugeStmt.rows || Math.round(gaugeStmt.sts * 1.4);
+      $('gauge-sts').value = state.sts; $('gauge-rows').value = state.rows;
+    }
+  } else {
+    appliedGauge = null;
+  }
   full = new Knitter(parsed, knitOpts(null)).run();
   messages.push(...full.messages);
   if (messages.length === 0) {

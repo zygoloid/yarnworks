@@ -52,6 +52,14 @@ export class Knitter {
     this.stopped = false;
     this.currentRow = null;
     this.turnedMidRow = false;
+    // Sections ("Heel flap:"), for relative measurements and labels.
+    this.sectionName = null;
+    this.sectionStartRow = 0;
+    // A flat section worked over part of the stitches while the rest are held.
+    this.flat = null;
+    // A row that ended with stitches unworked; an error unless the next statement holds them.
+    this.pendingIncomplete = null;
+    this.userHeld = [];
   }
 
   // -- Utilities --------------------------------------------------------------
@@ -123,6 +131,14 @@ export class Knitter {
     // Markers before the first stitch are slipped implicitly, as a knitter would.
     while (this.left.length > 0 && typeof this.left[0] !== 'number') this.right.push(this.left.shift());
     while (out.length < n) {
+      if (this.left.length === 0 && this.inRound && this.currentRow && !this.currentRow.castOn && this.loopsOn(this.right) > 0) {
+        // Working past the end of a round continues into the stitches just worked and
+        // moves the beginning of the round.
+        this.left = this.right; this.right = [];
+        this.currentRow.wrapped = true;
+        this.wrapPending = true;
+        this.message('warning', `${this.rowLabel()}: works past the end of the round, so the beginning of the round moves`, loc);
+      }
       if (this.left.length === 0 || typeof this.left[0] !== 'number') {
         if (this.left.length > 0 && this.left[0].marker) {
           throw this.err(`"${what}" needs ${n} stitch${n === 1 ? '' : 'es'} but there is a stitch marker between them (move or remove the marker first)`, loc);
@@ -150,6 +166,7 @@ export class Knitter {
   run() {
     try {
       this.executeStatements(this.pattern.statements);
+      this.flushIncomplete();
       if (!this.castOn && this.nodes.length === 0) {
         this.message('error', 'The pattern does not cast on any stitches. Start with e.g. "Cast on 20 sts".', null);
       }
@@ -184,6 +201,7 @@ export class Knitter {
       // Final needle state, for rendering when the piece is shown complete.
       left: this.left.slice(),
       right: this.right.slice(),
+      held: this.flat ? this.flat.held.slice() : [],
     };
   }
 
@@ -205,8 +223,14 @@ export class Knitter {
   }
 
   executeStatement(s) {
+    if (!['workFlat', 'yarn', 'section', 'gauge'].includes(s.type)) this.flushIncomplete();
     switch (s.type) {
       case 'sizes': return;
+      case 'gauge': return;
+      case 'section': this.sectionName = s.name; this.sectionStartRow = this.rows.length; return;
+      case 'workFlat': return this.doWorkFlat(s);
+      case 'resumeRound': return this.doResumeRound(s);
+      case 'graft': return this.doGraft(s);
       case 'castOn': return this.doCastOn(s);
       case 'join': return this.doJoin(s);
       case 'bindOff': return this.doBindOffAll(s);
@@ -267,6 +291,7 @@ export class Knitter {
       stitchesBefore: this.remaining(),
       stitchesAfter: 0,
       markersBefore: this.markerPositions(this.left),
+      section: this.sectionName,
     };
     this.rows.push(row);
     this.currentRow = row;
@@ -284,7 +309,10 @@ export class Knitter {
   turn() {
     if (this.inRound) {
       // Continue around: the right needle's stitches become the left needle's, in the same order.
-      this.left = this.right.concat(this.left);
+      // After a round that ran past its end, the stitches worked past the old end are the
+      // new end of the round.
+      this.left = this.wrapPending ? this.left.concat(this.right) : this.right.concat(this.left);
+      this.wrapPending = false;
       this.right = [];
     } else {
       const newLeft = this.right.slice().reverse();
@@ -319,7 +347,14 @@ export class Knitter {
   executeRowBlock(block) {
     const labelled = block.every((s) => s.labels);
     if (!labelled) {
-      for (const s of block) this.executeRowStatement(s);
+      // Mixed labelled and unlabelled rows: work them in order, but still record the
+      // labels so that "repeat rows 1-2" can find them.
+      for (const s of block) {
+        if (s.labels && s.labels.list) for (const l of s.labels.list) this.rowDefs.set(l, s);
+        else if (s.labels && s.labels.from !== undefined) for (let l = s.labels.from; l <= s.labels.to; l++) this.rowDefs.set(l, s);
+        if (s.type === 'repeatRows') this.doRepeatRows(s, s);
+        else this.executeRowStatement(s, s.labels && s.labels.list ? s.labels.list[0] : undefined);
+      }
       return;
     }
     // Build the label map.
@@ -367,6 +402,11 @@ export class Knitter {
 
   /** Execute one row statement as one row. */
   executeRowStatement(s, label, isRepeat = false) {
+    this.flushIncomplete();
+    if (s.isRound && !this.inRound && this.flat) {
+      // A round after a flat section: rejoin.
+      this.doResumeRound(s);
+    }
     if (s.isRound && !this.inRound) {
       if (this.inRoundOverride === false) {
         this.message('warning', 'This is a round but "knit flat" is selected; working it as a row', s.loc);
@@ -407,17 +447,22 @@ export class Knitter {
 
   endOfRow(s, isRepeat = false) {
     const row = this.currentRow;
-    if (row.turned) {
-      // Short row: the row ended at a turn.
+    if (row.turned || row.wrapped) {
+      // Short row (ended at a turn), or a round that ran past its end.
     } else {
       const rem = this.remaining();
       if (rem > 0) {
-        throw this.err(`${rem} stitch${rem === 1 ? ' is' : 'es are'} left unworked at the end of the row (the instructions only use ${row.stitchesBefore - rem} of ${row.stitchesBefore})`, s.loc);
+        // Not an error yet: the next statement may hold these stitches ("work the next 28 sts back and forth").
+        this.pendingIncomplete = { error: this.err(`${rem} stitch${rem === 1 ? ' is' : 'es are'} left unworked at the end of the row (the instructions only use ${row.stitchesBefore - rem} of ${row.stitchesBefore})`, s.loc) };
       }
     }
     // A stitch count noted on a row applies when the row is first worked, not on later repeats.
     if (!isRepeat) this.checkCount(s.expectedCount, s.loc, row.label);
     this.finishRow(false);
+  }
+
+  flushIncomplete() {
+    if (this.pendingIncomplete) { const e = this.pendingIncomplete.error; this.pendingIncomplete = null; throw e; }
   }
 
   checkCount(expectedCount, loc, label) {
@@ -505,7 +550,8 @@ export class Knitter {
     if (t.kind === 'measure') {
       const targetMm = t.unit === 'cm' ? this.num(t.length, s.loc) * 10 : t.unit === 'in' ? this.num(t.length, s.loc) * 25.4 : this.num(t.length, s.loc);
       let guard = 0;
-      while (this.heightMm() < targetMm - 1e-6) {
+      const from = t.from ? this.sectionStartRow : 0;
+      while (this.heightMm(from) < targetMm - 1e-6) {
         runOnce();
         if (++guard > 5000) throw new KnitError('Too many rows (is the gauge sensible?)', s.loc);
       }
@@ -559,8 +605,8 @@ export class Knitter {
     return null;
   }
 
-  heightMm() { return this.rowsWorked() * this.rowHeight; }
-  rowsWorked() { return this.rows.filter((r) => !r.castOn && r.complete).length; }
+  heightMm(fromRow = 0) { return this.rowsWorked(fromRow) * this.rowHeight; }
+  rowsWorked(fromRow = 0) { let n = 0; for (let i = fromRow; i < this.rows.length; i++) if (!this.rows[i].castOn && this.rows[i].complete) n++; return n; }
   stitchCount() { return this.loopsOn(this.left) + this.loopsOn(this.right); }
 
   doPlainRows(s) {
@@ -611,6 +657,7 @@ export class Knitter {
     switch (item.type) {
       case 'stitch': return this.doStitch(item);
       case 'cable': return this.doCable(item);
+      case 'pickup': return this.doPickUp(item);
       case 'toTarget': return this.doToTarget(item);
       case 'group': return this.doRepeat(item.body, item.times, item.loc, 'group');
       case 'star': return this.doRepeat(item.body, item.times, item.loc, 'repeat');
@@ -729,7 +776,32 @@ export class Knitter {
       }
       return;
     }
+    if (t.kind === 'toGap') {
+      const before = this.num(t.before, item.loc);
+      let guard = 0;
+      for (;;) {
+        const g = this.gapIndex();
+        if (g === null) throw this.err(`"${item.op} to gap" but there is no gap on the needle (the previous row did not turn partway)`, item.loc);
+        if (g <= before) break;
+        this.doStitch(one);
+        if (++guard > 100000) break;
+      }
+      return;
+    }
     throw this.err('Unsupported target', item.loc);
+  }
+
+  /** Loops on the left needle before the gap left by the previous row's turn, or null if none. */
+  gapIndex() {
+    if (!this.currentRow || this.currentRow.index === 0) return null;
+    const prev = this.currentRow.index - 1;
+    let n = 0;
+    for (const e of this.left) {
+      if (typeof e !== 'number') continue;
+      if (this.nodes[e].row !== prev) return n;
+      n++;
+    }
+    return null;
   }
 
   doStitch(item) {
@@ -829,6 +901,8 @@ export class Knitter {
         return;
       }
       case 'turn': case 'wt': {
+        // "Turn" at the natural end of a row is just the usual turn between rows.
+        if (op === 'turn' && this.remaining() === 0) return;
         if (op === 'wt') {
           const next = this.nextLoop();
           if (next === null) throw this.err('"w&t" but there is no stitch left to wrap', loc);
@@ -872,6 +946,127 @@ export class Knitter {
       node.cableShift = i - j; // columns moved along the knitting direction
       this.put(node);
     });
+  }
+
+  /**
+   * Begin working flat over the next `count` stitches; the rest are held. Used for heel
+   * flaps and similar. The first flat row is a right-side row.
+   */
+  doWorkFlat(s) {
+    const n = this.num(s.count, s.loc);
+    if (this.flat) throw new KnitError('Already working back and forth over part of the stitches', s.loc);
+    this.pendingIncomplete = null;
+    if (this.currentRow) this.finishRow(false);
+    // Stitches worked so far this round are on the right needle; in round order the held
+    // stitches are those, then whatever follows the flat section on the left needle.
+    let left = this.left, right = this.right;
+    if (!this.inRound) {
+      // Flat work: the next stitches are on the left needle after a turn.
+      this.beginRowNeedles();
+      left = this.left; right = this.right;
+    }
+    const loops = left.filter((e) => typeof e === 'number');
+    if (loops.length < n) throw new KnitError(`"work the next ${n} sts back and forth" but only ${loops.length} sts remain in the round`, s.loc);
+    let taken = 0, cut = 0;
+    while (taken < n && cut < left.length) { if (typeof left[cut] === 'number') taken++; cut++; }
+    const active = left.slice(0, cut);
+    // Round order continues after the active stitches: the rest of the left needle, then
+    // the stitches already worked this round.
+    const held = left.slice(cut).concat(right);
+    this.flat = { startRow: this.rows.length, width: n, held, wasRound: this.inRound, edgesUsed: 0 };
+    this.left = active;
+    this.right = [];
+    this.inRound = false;
+    this.side = 'rs';
+    this.turnedMidRow = true; // the stitches are already on the left needle
+    this.sideKnown = true;
+  }
+
+  /** Rejoin the held stitches and continue in the round. */
+  doResumeRound(s) {
+    if (!this.flat) throw new KnitError('Not working back and forth over part of the stitches, so there is nothing to rejoin', s.loc);
+    if (this.currentRow) this.finishRow(false);
+    // After the last flat row the worked stitches are on the right needle in that row's
+    // working order; in round order (right side facing) a wrong-side row reads backwards.
+    const worked = this.side === 'ws' ? this.right.slice().reverse() : this.right.slice();
+    this.left = this.flat.held.concat(worked, this.left);
+    this.right = [];
+    this.flat.endRow = this.rows.length;
+    this.flat.resumed = true;
+    this.inRound = this.flat.wasRound;
+    this.joined = this.inRound;
+    this.side = 'rs';
+    this.turnedMidRow = true;
+    this.lastFlat = this.flat;
+    this.flat = null;
+  }
+
+  /**
+   * Pick up and knit stitches along the edge of the most recent flat section, on the edge
+   * where the working yarn is. Each new loop is knit into a selvedge loop of the flap.
+   */
+  doPickUp(item) {
+    const n = this.num(item.count, item.loc);
+    const flap = this.lastFlat || this.flat;
+    if (!flap) throw this.err('"pick up and knit" needs an edge to pick up from: work some rows back and forth first', item.loc);
+    if (this.flat) this.doResumeRound(item);
+    // Rows of the flat section at its full width (the flap itself, not the heel turn).
+    const rows = [];
+    for (let i = flap.startRow; i < (flap.endRow || this.rows.length); i++) {
+      const r = this.rows[i];
+      if (!r.short && r.nodes.length === flap.width) rows.push(r);
+    }
+    if (rows.length === 0) throw this.err('The flat section has no full-width rows to pick up along', item.loc);
+    // Edge R is where right-side rows begin (and wrong-side rows end); edge L the other.
+    // The yarn is at the edge where the section's last row ended.
+    const lastRow = this.rows[(flap.endRow || this.rows.length) - 1];
+    const yarnEdge = lastRow.side === 'ws' ? 'R' : 'L';
+    const edge = flap.edgesUsed === 0 ? yarnEdge : (yarnEdge === 'R' ? 'L' : 'R');
+    flap.edgesUsed++;
+    const chain = rows.map((r) => {
+      const atStart = (edge === 'R') === (r.side === 'rs');
+      return { id: atStart ? r.nodes[0] : r.nodes[r.nodes.length - 1], inward: atStart ? r.nodes[1] : r.nodes[r.nodes.length - 2] };
+    });
+    // Prefer the elongated slipped selvedge stitches when the flap has them.
+    const slipped = chain.filter((c) => this.nodes[c.id].kind === 'sl');
+    const edgeLoops = slipped.length >= chain.length / 3 ? slipped : chain;
+    // Order: the first pick-up runs from the top of the flap down, the second back up.
+    if (flap.edgesUsed === 1) edgeLoops.reverse();
+    for (let i = 0; i < n; i++) {
+      const c = edgeLoops[Math.min(edgeLoops.length - 1, Math.floor((i + 0.5) * edgeLoops.length / n))];
+      const node = this.newNode({ kind: 'k', op: 'pick up', face: this.faceFor('k'), parents: [c.id], loc: item.loc });
+      node.pickedUp = { edge: c.id, inward: c.inward };
+      this.put(node);
+    }
+    if (Math.abs(edgeLoops.length - n) > Math.max(2, edgeLoops.length * 0.25)) {
+      this.message('warning', `${this.rowLabel()}: picking up ${n} sts along an edge with ${edgeLoops.length} selvedge stitches`, item.loc);
+    }
+  }
+
+  /** Graft the remaining live stitches together (Kitchener stitch), closing the piece. */
+  doGraft(s) {
+    if (!this.castOn) throw new KnitError('Graft: nothing has been cast on yet', s.loc);
+    const row = this.startRow('Graft', s.loc, this.inRound);
+    row.stmt = null;
+    const loops = this.left.filter((e) => typeof e === 'number');
+    if (loops.length < 2) throw new KnitError('Graft: there are not enough stitches to graft together', s.loc);
+    // Split at the marker if there is one near the middle, otherwise exactly in half.
+    let split = -1, count = 0;
+    for (const e of this.left) { if (typeof e === 'number') count++; else if (Math.abs(count - loops.length / 2) <= 1) split = count; }
+    if (split < 0) split = Math.floor(loops.length / 2);
+    const front = loops.slice(0, split), back = loops.slice(split);
+    const pairs = Math.max(front.length, back.length);
+    this.left = [];
+    for (let i = 0; i < pairs; i++) {
+      const a = front[Math.min(i, front.length - 1)];
+      const b = back[Math.max(0, back.length - 1 - i)];
+      const node = this.newNode({ kind: 'k', op: 'graft', face: 'k', parents: a === b ? [a] : [a, b], loc: s.loc });
+      node.graft = true;
+      node.finished = true;
+    }
+    this.right = [];
+    this.finishRow(false);
+    this.finished = true;
   }
 
   stitchesToMarker() {

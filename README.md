@@ -73,6 +73,16 @@ Stitches: `k`, `p`, `k2tog`, `p2tog`, `ssk`, `k3tog`, `sk2p`, `s2kp`/`cdd`,
 Cables: `c4f`, `c6b`, `cable 4 front`, `2/2 RC`, `2/2 LC`, `2/1 RPC`,
 `2/1 LPC`, `LT`, `RT`.
 
+Garment construction (see the sock example): section headings such as
+`Heel flap:` with measurements relative to the section (`until heel flap
+measures 5 cm`); `Work the next 28 sts back and forth` to work a flap on
+part of the stitches while the rest are held; `k to 1 st before gap` when
+turning a heel; `pick up and knit 14 sts along the edge of the heel flap`;
+a round that works past its end moves the beginning of the round; `Graft
+the remaining sts together` for a Kitchener-stitched toe. `Gauge: 40 sts
+and 56 rows = 10 cm` in a pattern sets the gauge. Lines beginning with
+`Note:` are ignored.
+
 Repeats: `*…; rep from * to end`, `rep from * to last 3 sts`,
 `(k1, yo) 3 times`, `[k2tog] twice`, `k to end`, `p to last 2 sts`,
 `k to marker`, `k to 2 sts before marker`.

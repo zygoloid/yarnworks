@@ -221,3 +221,72 @@ Row 4: p2, 2/1 LPC, p3.`);
   const row4 = r.rows[4].nodes.map((id) => r.nodes[id]);
   assert.deepEqual(row4.slice(2, 5).map((n) => [n.kind, n.layer]), [['p', -1], ['k', 1], ['k', 1]]);
 });
+
+test('sock construction: flat heel flap on held stitches, heel turn with gaps, pick-ups, wrapped round, graft', () => {
+  const r = run(`Sizes: S (M)
+Cuff:
+With CC, cast on 24 (30) sts.
+Join in the round.
+Rnd 1: *k2, p1; rep from * to end.
+Rnd 2: as rnd 1.
+Leg:
+Change to MC.
+Knit 4 rounds.
+Heel flap:
+Next rnd: k12 (15).
+Work the next 12 (15) sts back and forth.
+Row 1 (RS): k2, [sl1, k1] to end. Turn.
+Row 2: sl1 wyif, p to end. Turn.
+Row 3: [sl1, k1] to end. Turn.
+Repeat rows 2-3 until heel flap measures 4 cm, ending after a purl row.
+Heel turn:
+Row 1: sl1, k6 (8), ssk, k1, turn.
+Row 2: sl1, p3, p2tog, p1, turn.
+Row 3: sl1, k to 1 st before gap, ssk, k1, turn.
+Row 4: sl1, p to 1 st before gap, p2tog, p1, turn.
+Repeat rows 3-4 until there are 8 (11) sts.
+Next row: sl1, p to end.
+Gusset:
+Change to MC.
+Next rnd: pick up and knit 5 (6) sts along the edge of the heel flap, k12 (15), pm, pick up and knit 5 (6) sts along the other edge of the heel flap, k8 (11), k5 (6). 30 (38) sts
+Rnd 1: k to marker, sm, k1, ssk, k to 3 sts before end, k2tog, k1.
+Rnd 2: k.
+Repeat rnds 1-2 until there are 24 (30) sts.
+Toe:
+Rnd 1: k1, ssk, k to 3 sts before marker, k2tog, k1, sm, k1, ssk, k to 3 sts before end, k2tog, k1.
+Rnd 2: k.
+Repeat rnds 1-2 until there are 12 (14) sts.
+Graft the remaining sts together.`, { rowHeight: 4 });
+  assert.deepEqual(errors(r), []);
+  assert.equal(r.finished, true);
+  const sections = [...new Set(r.rows.map((x) => x.section))];
+  assert.deepEqual(sections, ['Cuff', 'Leg', 'Heel flap', 'Heel turn', 'Gusset', 'Toe']);
+  // The flap is flat with 12 sts while the 12 instep stitches are held.
+  const flap = r.rows.filter((x) => x.section === 'Heel flap' && !x.isRound);
+  assert.ok(flap.length >= 5);
+  assert.ok(flap.every((x) => x.stitchesBefore === 12 && !x.short));
+  // Heel turn short rows decrease by one each row down to 8.
+  const turn = r.rows.filter((x) => x.section === 'Heel turn');
+  assert.equal(turn[turn.length - 1].stitchesAfter, 8);
+  assert.ok(turn.filter((x) => x.short).length >= 2);
+  assert.deepEqual(r.messages.filter((m) => m.severity === 'warning').map((m) => m.message.replace(/^.*?: /, '')), ['works past the end of the round, so the beginning of the round moves']);
+  // Pick-ups attach to slipped selvedge stitches of the flap; the gusset round wraps.
+  const pickups = r.nodes.filter((n) => n.op === 'pick up');
+  assert.equal(pickups.length, 10);
+  assert.ok(pickups.every((n) => r.nodes[n.parents[0]].kind === 'sl'));
+  const gusset = r.rows.find((x) => x.section === 'Gusset');
+  assert.equal(gusset.wrapped, true);
+  assert.equal(gusset.stitchesAfter, 30);
+  // The next round starts at the instep: its first stitch is knit into an instep stitch of
+  // the pick-up round, which was itself knit into a leg stitch.
+  const next = r.rows[gusset.index + 1];
+  const instep = r.nodes[r.nodes[next.nodes[0]].parents[0]];
+  assert.equal(instep.op, 'k');
+  const before = r.rows[r.nodes[instep.parents[0]].row]; // the partial round worked before the flap
+  assert.equal(before.isRound, true);
+  assert.equal(before.section, 'Heel flap');
+  // Graft closes the toe: 6 graft loops joining pairs.
+  const grafts = r.nodes.filter((n) => n.graft);
+  assert.equal(grafts.length, 6);
+  assert.ok(grafts.every((n) => n.parents.length === 2));
+});

@@ -161,9 +161,10 @@ export class Parser {
       const cur = new Cursor(toks);
       try {
         const stmt = this.parseStatement(cur);
-        if (stmt) {
-          stmt.loc = stmt.loc || { line: toks[0].line, col: toks[0].col, end: toks[toks.length - 1].end };
-          this.statements.push(stmt);
+        for (const st of Array.isArray(stmt) ? stmt : [stmt]) {
+          if (!st) continue;
+          st.loc = st.loc || { line: toks[0].line, col: toks[0].col, end: toks[toks.length - 1].end };
+          this.statements.push(st);
         }
       } catch (e) {
         if (e instanceof PatternError) this.errors.push(e);
@@ -189,6 +190,14 @@ export class Parser {
     const w = first.value;
 
     if (w === 'sizes' || w === 'size') return this.parseSizes(cur);
+    if (w === 'gauge' || w === 'tension') return this.parseGauge(cur);
+    // A section heading: a few words and a colon, nothing else ("Heel flap:").
+    if (this.looksLikeHeading(cur)) return this.parseHeading(cur);
+    if ((w === 'graft' || w === 'kitchener') || (w === 'close' && cur.isWord('the', 1))) return this.parseGraft(cur);
+    if ((w === 'resume' || w === 'rejoin' || w === 'return') || (w === 'continue' && cur.isWord(['in', 'working'], 1) && (cur.isWord('the', 2) || cur.isWord('in', 2)) && (cur.isWord('round', 3) || cur.isWord('the', 3)))) {
+      const r = this.tryResumeRound(cur);
+      if (r) return r;
+    }
     if (w === 'cast' && cur.isWord('on', 1)) return this.parseCastOn(cur);
     if (w === 'co' && (cur.isNum(1) || cur.isWord(['all'], 1))) return this.parseCastOn(cur);
     if ((w === 'bind' || w === 'cast') && cur.isWord('off', 1)) { cur.next(); cur.next(); return this.parseBindOffStatement(cur); }
@@ -202,6 +211,8 @@ export class Parser {
     if (w === 'work') {
       cur.next();
       if (cur.isWord(ROW_WORDS_ARR)) return this.parseRepeatRows(cur, null);
+      const flat = this.tryWorkFlat(cur, first);
+      if (flat) return flat;
       return this.parsePlainRows(cur, first);
     }
     if ((w === 'knit' || w === 'purl' || w === 'k' || w === 'p') && (cur.isNum(1) || NUMBER_WORDS[cur.peek(1).value] !== undefined) && cur.isWord(['rows', 'row', 'rnds', 'rnd', 'rounds', 'round'], 2)) {
@@ -271,8 +282,85 @@ export class Parser {
     cur.acceptWord(['color', 'colour', 'yarn']);
     const t = cur.next();
     if (t.type !== 'word') throw cur.error('Expected a yarn name (e.g. "A" or "MC")', t);
+    const yarn = { type: 'yarn', name: t.text.toUpperCase(), loc: cur.loc(first) };
+    cur.acceptWord(['yarn', 'color', 'colour']);
+    // "With CC, cast on 57 sts": the rest of the line is a statement of its own.
+    if (cur.acceptPunct(',') && !cur.atEnd() && cur.peek().type === 'word') {
+      const rest = this.parseStatement(cur);
+      return [yarn, ...(Array.isArray(rest) ? rest : [rest])];
+    }
     while (!cur.atEnd()) cur.next();
-    return { type: 'yarn', name: t.text.toUpperCase(), loc: cur.loc(first) };
+    return yarn;
+  }
+
+  /** "Gauge: 40 sts and 56 rows = 10 cm" (rows optional; the unit is assumed to be 10 cm / 4 in). */
+  parseGauge(cur) {
+    const first = cur.next();
+    cur.acceptPunct(':');
+    let sts = null, rows = null;
+    while (!cur.atEnd()) {
+      if (cur.isNum()) {
+        const n = cur.next().value;
+        if (cur.isWord(['sts', 'st', 'stitches'])) { cur.next(); sts = n; continue; }
+        if (cur.isWord(['rows', 'rnds', 'rounds'])) { cur.next(); rows = n; continue; }
+        continue;
+      }
+      cur.next();
+    }
+    if (sts === null) throw cur.error('Expected a stitch count in the gauge (e.g. "22 sts and 30 rows = 10 cm")', first);
+    return { type: 'gauge', sts, rows, loc: cur.loc(first) };
+  }
+
+  looksLikeHeading(cur) {
+    let j = 0;
+    while (cur.peek(j).type === 'word' && j < 4) j++;
+    return j >= 1 && j <= 4 && cur.isPunct(':', j) && cur.peek(j + 1).type === 'eol' && !ROW_WORDS.has(cur.peek(0).value) && cur.peek(0).value !== 'next';
+  }
+
+  parseHeading(cur) {
+    const first = cur.peek();
+    const words = [];
+    while (cur.peek().type === 'word') words.push(cur.next().text);
+    cur.acceptPunct(':');
+    return { type: 'section', name: words.join(' '), loc: cur.loc(first) };
+  }
+
+  /** "Graft the remaining sts together", "Kitchener stitch the toe closed", "Close the toe with kitchener stitch". */
+  parseGraft(cur) {
+    const first = cur.next();
+    while (!cur.atEnd()) cur.next();
+    return { type: 'graft', loc: cur.loc(first) };
+  }
+
+  /** "Resume working in the round", "Rejoin in the round", "Continue in the round". */
+  tryResumeRound(cur) {
+    const first = cur.peek();
+    let j = 0, found = false;
+    while (cur.peek(j).type !== 'eol' && j < 8) { if (cur.isWord(['round', 'rnd', 'rounds'], j)) found = true; j++; }
+    if (!found) return null;
+    while (!cur.atEnd()) cur.next();
+    return { type: 'resumeRound', loc: cur.loc(first) };
+  }
+
+  /** After "work": "the next 28 sts back and forth", "back and forth over the next 28 sts", "flat over the next 28 sts". */
+  tryWorkFlat(cur, first) {
+    const save = cur.i;
+    let count = null, flat = false;
+    let guard = 0;
+    while (!cur.atEnd() && guard++ < 20) {
+      if (cur.isWord('back') && cur.isWord('and', 1) && cur.isWord('forth', 2)) { cur.next(); cur.next(); cur.next(); flat = true; continue; }
+      if (cur.isWord('flat')) { cur.next(); flat = true; continue; }
+      if (cur.isNum() && count === null) {
+        const n = this.parseCountValue(cur);
+        if (cur.isWord(['sts', 'st', 'stitches'])) { cur.next(); count = n; continue; }
+        continue;
+      }
+      if (cur.isWord(['in', 'until', 'for']) && !flat) break;
+      cur.next();
+    }
+    if (!flat || count === null) { cur.i = save; return null; }
+    while (!cur.atEnd()) cur.next();
+    return { type: 'workFlat', count, loc: cur.loc(first) };
   }
 
   /** Row/round header and body. */
@@ -396,7 +484,13 @@ export class Parser {
     cur.acceptWord('of');
     if (cur.acceptWord('until')) {
       cur.acceptWord(['the', 'your']);
-      if (cur.acceptWord(['piece', 'work', 'it', 'sleeve', 'body', 'sock', 'leg', 'foot', 'cuff', 'scarf', 'hat', 'garment'])) {
+      // "until piece measures" (from the cast on) or "until heel flap measures" (from that section).
+      let j = 0;
+      while (cur.peek(j).type === 'word' && !cur.isWord(['measures', 'is', 'reaches', 'there'], j) && j < 4) j++;
+      if (cur.isWord(['measures', 'is', 'reaches'], j) && j >= 1) {
+        const words = [];
+        for (let k = 0; k < j; k++) words.push(cur.next().value);
+        const from = ['piece', 'work', 'it'].includes(words[0]) && words.length === 1 ? null : words.join(' ');
         cur.acceptWord(['measures', 'is', 'reaches']);
         cur.acceptWord(['approximately', 'approx', 'about']);
         const n = this.parseCountValue(cur, true);
@@ -408,7 +502,7 @@ export class Parser {
         else if (['mm'].includes(unit)) unit = 'mm';
         else throw cur.error('Expected a unit ("cm" or "inches")', unitTok);
         const endingWith = this.parseEndingWith(cur);
-        return { kind: 'measure', length: n, unit, endingWith };
+        return { kind: 'measure', length: n, unit, endingWith, from };
       }
       if (cur.acceptWord('there')) {
         cur.acceptWord(['are', 'remain']);
@@ -458,6 +552,9 @@ export class Parser {
       const t = cur.next();
       if (t.value === 'ws' || t.value === 'rs') { cur.acceptWord(ROW_WORDS_ARR); return t.value; }
       if (t.value === 'wrong' || t.value === 'right') { cur.acceptWord('side'); cur.acceptWord(ROW_WORDS_ARR); return t.value === 'wrong' ? 'ws' : 'rs'; }
+      // "ending with a purl row" / "a knit row": in stockinette-based fabric, purl rows are WS rows.
+      if (t.value === 'purl' || t.value === 'p') { cur.acceptWord(ROW_WORDS_ARR); return 'ws'; }
+      if (t.value === 'knit' || t.value === 'k') { cur.acceptWord(ROW_WORDS_ARR); return 'rs'; }
       throw cur.error('Expected "RS row" or "WS row"', t);
     }
     return null;
@@ -609,10 +706,31 @@ export class Parser {
       }
       const cable = this.tryCable(cur);
       if (cable) { items.push(cable); continue; }
+      const pickup = this.tryPickUp(cur);
+      if (pickup) { items.push(pickup); continue; }
       const item = this.parseItem(cur, context);
       if (item) items.push(item);
     }
     return { items, expectedCount };
+  }
+
+  /**
+   * "pick up and knit 14 (16, 18, 20) sts along the left edge of the heel flap", "pu 14 sts".
+   * The edge is whichever one the working yarn is at, so the words after the count are ignored.
+   */
+  tryPickUp(cur) {
+    const first = cur.peek();
+    if (cur.isWord('pick') && cur.isWord('up', 1)) { cur.next(); cur.next(); }
+    else if (cur.isWord(['pu', 'puk'])) cur.next();
+    else return null;
+    cur.acceptWord('and');
+    cur.acceptWord(['knit', 'k']);
+    const n = this.parseCountValue(cur);
+    if (n === null) throw cur.error('Expected a number of stitches to pick up');
+    cur.skipNoise();
+    // Skip "along the left edge of the heel flap" up to the next separator.
+    while (!cur.atEnd() && !cur.isPunct([',', ';', '.', ')', ']']) && !cur.isWord(['pm', 'sm', 'k', 'p', 'knit', 'purl'])) cur.next();
+    return { type: 'pickup', count: n, loc: cur.loc(first) };
   }
 
   /**
@@ -756,16 +874,19 @@ export class Parser {
       return { kind: 'toEnd', leave: n };
     }
     if (cur.acceptWord(['marker', 'm', 'mark'])) return { kind: 'toMarker', before: 0 };
+    if (cur.acceptWord('gap')) return { kind: 'toGap', before: 0 };
     if (cur.acceptWord('next')) { cur.acceptWord(['marker', 'm']); return { kind: 'toMarker', before: 0 }; }
     const n = this.parseCountValue(cur);
     if (n !== null) {
       cur.skipNoise();
       cur.acceptWord('before');
+      cur.acceptWord('the');
       if (cur.acceptWord(['marker', 'm', 'next'])) { cur.acceptWord(['marker', 'm']); return { kind: 'toMarker', before: n }; }
+      if (cur.acceptWord('gap')) return { kind: 'toGap', before: n };
       if (cur.acceptWord('end')) { cur.acceptWord('of'); cur.acceptWord(ROW_WORDS_ARR); return { kind: 'toEnd', leave: n }; }
-      throw cur.error('Expected "before marker" or "before end"');
+      throw cur.error('Expected "before marker", "before gap" or "before end"');
     }
-    throw cur.error('Expected "end", "last N sts" or "marker"');
+    throw cur.error('Expected "end", "last N sts", "marker" or "gap"');
   }
 
   /** A single instruction: stitch (with count / modifiers / "to end"), marker, etc. */
@@ -880,6 +1001,7 @@ export class Parser {
     }
 
     if (op === 'psso') return { type: 'stitch', op, count: null, mods, loc: cur.loc(first) };
+    if (op === 'turn' || op === 'wt') { cur.acceptWord('the'); cur.acceptWord('work'); }
     if (op === 'bo' && count === null) {
       // "bind off remaining sts" / "bo all"
       if (cur.acceptWord(['all', 'rem', 'remaining'])) { cur.skipNoise(); return { type: 'stitch', op, count: 'all', mods, loc: cur.loc(first) }; }

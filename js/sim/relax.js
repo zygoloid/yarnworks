@@ -22,6 +22,7 @@ export class Relaxer {
     this.n = this.nodes.length;
     this.pos = new Float32Array(this.n * 3);
     this.inRound = knit.inRound;
+    this.anyRound = knit.rows.some((r) => r.isRound);
     this.constraints = []; // flat arrays below
     // Knit and purl faces sit on opposite sides of the fabric's mid-surface. Each loop
     // gets a preferred offset along the surface normal (toward the right side for a
@@ -134,16 +135,20 @@ export class Relaxer {
       if (prev && prev.has(i)) { const p = prev.get(i); this.set(i, p[0], p[1], p[2]); continue; }
       const row = rows[node.row];
       let x, y, z;
-      if (node.parents.length > 0) {
+      if (node.pickedUp) {
+        // Picked up along a selvedge: start one row height outward from the edge loop.
+        const e = this.get(node.pickedUp.edge), q = this.get(node.pickedUp.inward);
+        let dx = e[0] - q[0], dy = e[1] - q[1], dz = e[2] - q[2];
+        const l = Math.hypot(dx, dy, dz) || 1;
+        x = e[0] + dx / l * h; y = e[1] + dy / l * h; z = e[2] + dz / l * h;
+      } else if (node.parents.length > 0) {
         x = 0; y = 0; z = 0;
         for (const p of node.parents) { x += this.pos[3 * p]; y += this.pos[3 * p + 1]; z += this.pos[3 * p + 2]; }
         x /= node.parents.length; y /= node.parents.length; z /= node.parents.length;
-        if (this.inRound) {
-          // Move up and keep the radius.
-          y += h;
-        } else {
-          y += h;
-        }
+        // One row height along the direction the work is growing: for rounds, the normal
+        // of the previous round's loop, so a tube can bend (a sock's heel); otherwise up.
+        const up = this.growthDir(row);
+        x += up[0] * h; y += up[1] * h; z += up[2] * h;
       } else if (node.bar && (node.bar[0] !== null || node.bar[1] !== null)) {
         const ids = node.bar.filter((b) => b !== null);
         x = 0; y = 0; z = 0;
@@ -192,6 +197,55 @@ export class Relaxer {
   normalAt(x, y, z, node) {
     if (this.inRound) { const r = Math.hypot(x, z) || 1; return [x / r, 0, z / r]; }
     return [0, 0, 1];
+  }
+
+  /**
+   * Direction in which row `row` grows away from the row before it. For a round this is
+   * the normal of the previous round's loop (its area vector), oriented away from the
+   * round before that; for flat rows the direction between the previous rows' centres.
+   */
+  growthDir(row) {
+    if (!this.growth) this.growth = new Map();
+    if (this.growth.has(row.index)) return this.growth.get(row.index);
+    const rows = this.knit.rows;
+    let dir = [0, 1, 0];
+    const prev = row.index > 0 ? rows[row.index - 1] : null;
+    const centre = (r) => {
+      let x = 0, y = 0, z = 0;
+      for (const id of r.nodes) { x += this.pos[3 * id]; y += this.pos[3 * id + 1]; z += this.pos[3 * id + 2]; }
+      const n = r.nodes.length || 1;
+      return [x / n, y / n, z / n];
+    };
+    if (prev && prev.nodes.length >= 3) {
+      const c = centre(prev);
+      let nx = 0, ny = 0, nz = 0;
+      if (prev.isRound) {
+        const ids = prev.nodes;
+        for (let k = 0; k < ids.length; k++) {
+          const a = this.get(ids[k]), b = this.get(ids[(k + 1) % ids.length]);
+          const ax = a[0] - c[0], ay = a[1] - c[1], az = a[2] - c[2];
+          const bx = b[0] - c[0], by = b[1] - c[1], bz = b[2] - c[2];
+          nx += ay * bz - az * by; ny += az * bx - ax * bz; nz += ax * by - ay * bx;
+        }
+      }
+      const nl = Math.hypot(nx, ny, nz);
+      if (nl > 1e-6) {
+        dir = [nx / nl, ny / nl, nz / nl];
+        // Orient away from the round before the previous one.
+        const pp = row.index > 1 ? rows[row.index - 2] : null;
+        if (pp && pp.nodes.length) {
+          const c2 = centre(pp);
+          const d = (c[0] - c2[0]) * dir[0] + (c[1] - c2[1]) * dir[1] + (c[2] - c2[2]) * dir[2];
+          if (d < 0) dir = [-dir[0], -dir[1], -dir[2]];
+        } else if (dir[1] < 0) dir = [-dir[0], -dir[1], -dir[2]];
+      } else {
+        // Flat rows keep growing the way the previous row did (straight up for a flat
+        // piece; along the last round's normal for a flap worked on part of a tube).
+        dir = this.growthDir(prev);
+      }
+    }
+    this.growth.set(row.index, dir);
+    return dir;
   }
 
   /** Approximate knitting direction at node `id` from its row's neighbours or side. */
@@ -289,6 +343,7 @@ export class Relaxer {
     }
     // Target radius per row for work in the round, from the row's contracted circumference.
     this.rowRadius = rows.map((r) => {
+      if (!r.isRound || r.nodes.length < 4) return 0;
       let circ = 0;
       for (let k = 0; k < r.nodes.length; k++) circ += this.coursePlane(r.nodes[k], r.nodes[(k + 1) % r.nodes.length]);
       return Math.max(w * 0.8, circ / (2 * Math.PI));
@@ -309,8 +364,8 @@ export class Relaxer {
         pos[i] += dx * f; pos[i + 1] += dy * f; pos[i + 2] += dz * f;
         pos[j] -= dx * f; pos[j + 1] -= dy * f; pos[j + 2] -= dz * f;
       }
-      if (this.inRound) this.inflate(0.2);
-      if (it % 2 === 0) this.smooth(0.35);
+      if (this.anyRound) this.inflate(0.2);
+      if (it % 3 === 0) this.smooth(0.45);
     }
   }
 
@@ -344,38 +399,60 @@ export class Relaxer {
     pos.set(out);
   }
 
+  /** Precompute the wide stencil (course ±3, wale ±2) used for the smoothing normal. */
+  buildStencils() {
+    const rows = this.knit.rows;
+    const n = this.n;
+    // Flat arrays: for each node, up to 3 back, 3 forward, 2 down, 2 up (-1 = none).
+    this.stBack = new Int32Array(n * 3).fill(-1);
+    this.stFwd = new Int32Array(n * 3).fill(-1);
+    this.stDown = new Int32Array(n * 2).fill(-1);
+    this.stUp = new Int32Array(n * 2).fill(-1);
+    this.stRs = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+      const node = this.nodes[i];
+      const row = rows[node.row];
+      for (let k = 1; k <= 3; k++) {
+        if (node.pos - k >= 0) this.stBack[3 * i + k - 1] = row.nodes[node.pos - k];
+        if (node.pos + k < row.nodes.length) this.stFwd[3 * i + k - 1] = row.nodes[node.pos + k];
+      }
+      let cur = node;
+      for (let k = 0; k < 2 && cur.parents.length; k++) { cur = this.nodes[cur.parents[0]]; this.stDown[2 * i + k] = cur.id; }
+      cur = node;
+      for (let k = 0; k < 2 && cur.children.length && cur.children[0] < n; k++) { cur = this.nodes[cur.children[0]]; this.stUp[2 * i + k] = cur.id; }
+      this.stRs[i] = row.side === 'rs' || row.isRound ? 1 : 0;
+    }
+    this.nrm = new Float32Array(3);
+  }
+
+  /** Mean of the mid-surface positions (offsets removed along the current normal estimate) of a stencil group. */
+  stencilMean(arr, base, count, self, nx, ny, nz, out) {
+    let x = 0, y = 0, z = 0, m = 0;
+    const pos = this.pos;
+    for (let k = 0; k < count; k++) {
+      const j = arr[base + k];
+      if (j < 0) continue;
+      const o = this.off[j];
+      x += pos[3 * j] - nx * o; y += pos[3 * j + 1] - ny * o; z += pos[3 * j + 2] - nz * o; m++;
+    }
+    if (m === 0) { const o = this.off[self]; x = pos[3 * self] - nx * o; y = pos[3 * self + 1] - ny * o; z = pos[3 * self + 2] - nz * o; m = 1; }
+    out[0] = x / m; out[1] = y / m; out[2] = z / m;
+  }
+
   /** Unit normal at node i pointing toward the right side of the fabric, or null. */
   rsNormal(i) {
-    const pos = this.pos;
-    const node = this.nodes[i];
-    const row = this.knit.rows[node.row];
-    // A wide stencil (up to three stitches along the course, two rows along the wale)
-    // so the zigzag of a rib or garter fold averages out of the estimate.
-    const back = [], fwd = [], down = [], up = [];
-    for (let k = 1; k <= 3; k++) {
-      if (node.pos - k >= 0) back.push(row.nodes[node.pos - k]);
-      if (node.pos + k < row.nodes.length) fwd.push(row.nodes[node.pos + k]);
-    }
-    let cur = node;
-    for (let k = 0; k < 2 && cur.parents.length; k++) { cur = this.nodes[cur.parents[0]]; down.push(cur.id); }
-    cur = node;
-    for (let k = 0; k < 2 && cur.children.length && cur.children[0] < this.n; k++) { cur = this.nodes[cur.children[0]]; up.push(cur.id); }
-    if ((back.length === 0 && fwd.length === 0) || (down.length === 0 && up.length === 0)) return null;
-    if (back.length === 0) back.push(i);
-    if (fwd.length === 0) fwd.push(i);
-    if (down.length === 0) down.push(i);
-    if (up.length === 0) up.push(i);
-    const rs = row.side === 'rs' || row.isRound;
-    // Positions with the face offsets removed along a normal estimate; two passes, the
-    // first with no estimate, so neighbours' offsets do not tilt the result.
+    if (!this.stBack) this.buildStencils();
+    if ((this.stBack[3 * i] < 0 && this.stFwd[3 * i] < 0) || (this.stDown[2 * i] < 0 && this.stUp[2 * i] < 0)) return null;
+    const a = this.tA || (this.tA = [0, 0, 0]), b = this.tB || (this.tB = [0, 0, 0]);
+    const c = this.tC || (this.tC = [0, 0, 0]), d = this.tD || (this.tD = [0, 0, 0]);
+    const rs = this.stRs[i];
     let nx = 0, ny = 0, nz = 0;
-    const mean = (list) => {
-      let x = 0, y = 0, z = 0;
-      for (const j of list) { const o = this.off[j]; x += pos[3 * j] - nx * o; y += pos[3 * j + 1] - ny * o; z += pos[3 * j + 2] - nz * o; }
-      return [x / list.length, y / list.length, z / list.length];
-    };
+    // Two passes: the first with no normal estimate, so neighbours' offsets do not tilt the result.
     for (let pass = 0; pass < 2; pass++) {
-      const a = mean(back), b = mean(fwd), c = mean(down), d = mean(up);
+      this.stencilMean(this.stBack, 3 * i, 3, i, nx, ny, nz, a);
+      this.stencilMean(this.stFwd, 3 * i, 3, i, nx, ny, nz, b);
+      this.stencilMean(this.stDown, 2 * i, 2, i, nx, ny, nz, c);
+      this.stencilMean(this.stUp, 2 * i, 2, i, nx, ny, nz, d);
       const cx = b[0] - a[0], cy = b[1] - a[1], cz = b[2] - a[2];
       const wx = d[0] - c[0], wy = d[1] - c[1], wz = d[2] - c[2];
       let x, y, z;
@@ -385,23 +462,44 @@ export class Relaxer {
       if (l < 1e-9) return null;
       nx = x / l; ny = y / l; nz = z / l;
     }
-    return [nx, ny, nz];
+    const out = this.nrm;
+    out[0] = nx; out[1] = ny; out[2] = nz;
+    return out;
   }
 
-  /** Nudge each node toward its row's target radius about the y axis. */
+  /**
+   * Nudge each node of a round toward its round's target radius, measured from that
+   * round's own centre and about the local tube axis, so bent tubes (a sock's heel)
+   * stay open without being pulled onto a single straight axis.
+   */
   inflate(k) {
     const pos = this.pos;
-    // Axis through the mean x,z of everything.
-    let cx = 0, cz = 0;
-    for (let i = 0; i < this.n; i++) { cx += pos[3 * i]; cz += pos[3 * i + 2]; }
-    cx /= this.n; cz /= this.n;
-    for (let i = 0; i < this.n; i++) {
-      const node = this.nodes[i];
-      const R = this.rowRadius[node.row] + this.off[i];
-      const x = pos[3 * i] - cx, z = pos[3 * i + 2] - cz;
-      const r = Math.hypot(x, z) || 1e-6;
-      const f = (R - r) / r * k;
-      pos[3 * i] += x * f; pos[3 * i + 2] += z * f;
+    const rows = this.knit.rows;
+    if (!this.rowCentre) this.rowCentre = new Float32Array(rows.length * 3);
+    const c = this.rowCentre;
+    for (const r of rows) {
+      let x = 0, y = 0, z = 0;
+      for (const id of r.nodes) { x += pos[3 * id]; y += pos[3 * id + 1]; z += pos[3 * id + 2]; }
+      const n = r.nodes.length || 1;
+      c[3 * r.index] = x / n; c[3 * r.index + 1] = y / n; c[3 * r.index + 2] = z / n;
+    }
+    for (const r of rows) {
+      const R = this.rowRadius[r.index];
+      if (!R) continue;
+      // Local axis from the neighbouring rounds' centres.
+      const a = Math.max(0, r.index - 1), b = Math.min(rows.length - 1, r.index + 1);
+      let ax = c[3 * b] - c[3 * a], ay = c[3 * b + 1] - c[3 * a + 1], az = c[3 * b + 2] - c[3 * a + 2];
+      const al = Math.hypot(ax, ay, az);
+      if (al < 1e-6) { ax = 0; ay = 1; az = 0; } else { ax /= al; ay /= al; az /= al; }
+      const cx = c[3 * r.index], cy = c[3 * r.index + 1], cz = c[3 * r.index + 2];
+      for (const i of r.nodes) {
+        let x = pos[3 * i] - cx, y = pos[3 * i + 1] - cy, z = pos[3 * i + 2] - cz;
+        const d = x * ax + y * ay + z * az;
+        x -= ax * d; y -= ay * d; z -= az * d;
+        const rad = Math.hypot(x, y, z) || 1e-6;
+        const f = (R + this.off[i] - rad) / rad * k;
+        pos[3 * i] += x * f; pos[3 * i + 1] += y * f; pos[3 * i + 2] += z * f;
+      }
     }
   }
 

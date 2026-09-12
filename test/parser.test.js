@@ -118,13 +118,13 @@ test('repeat rows forms', () => {
   assert.deepEqual(s.ref, { list: [1] });
   s = parseOne('Rep the last 2 rows until piece measures 10 cm from cast-on edge, ending with a WS row.');
   assert.deepEqual(s.ref, { last: 2 });
-  assert.deepEqual(s.times, { kind: 'measure', length: 10, unit: 'cm', endingWith: 'ws' });
+  assert.deepEqual(s.times, { kind: 'measure', length: 10, unit: 'cm', endingWith: 'ws', from: null });
   s = parseOne('Repeat rows 1 and 2 until there are 20 sts.');
   assert.deepEqual(s.times, { kind: 'stitches', count: 20 });
   s = parseOne('Work rows 1-4 twice.');
   assert.deepEqual(s.times, { kind: 'count', count: 2, endingWith: null });
   s = parseOne('Rep row 5 until piece measures 4.5"');
-  assert.deepEqual(s.times, { kind: 'measure', length: 4.5, unit: 'in', endingWith: null });
+  assert.deepEqual(s.times, { kind: 'measure', length: 4.5, unit: 'in', endingWith: null, from: null });
 });
 
 test('plain rows', () => {

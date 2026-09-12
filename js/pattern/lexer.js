@@ -78,6 +78,8 @@ export function tokenize(text) {
   const lines = text.split(/\r?\n/);
   const out = [];
   for (let i = 0; i < lines.length; i++) {
+    // Notes to the knitter ("*Note: slip purlwise*") are not instructions.
+    if (/^\s*\*?\s*notes?\b/i.test(lines[i])) continue;
     const toks = tokenizeLine(lines[i], i + 1);
     if (toks.length > 1) out.push(toks);
   }
