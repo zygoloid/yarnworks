@@ -12,12 +12,13 @@ export const WEIGHTS = [
 
 export function weightById(id) { return WEIGHTS.find((w) => w.id === id) || WEIGHTS[3]; }
 
-/** Parse a CSS hex colour into [r,g,b] in 0..1. */
+/** Parse a CSS hex colour into linear [r,g,b] in 0..1 (vertex colours are linear). */
 export function hexToRgb(hex) {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
-  if (!m) return [0.5, 0.5, 0.5];
+  if (!m) return [0.2, 0.2, 0.2];
   const v = parseInt(m[1], 16);
-  return [((v >> 16) & 255) / 255, ((v >> 8) & 255) / 255, (v & 255) / 255];
+  const toLinear = (c) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+  return [toLinear(((v >> 16) & 255) / 255), toLinear(((v >> 8) & 255) / 255), toLinear((v & 255) / 255)];
 }
 
 /**

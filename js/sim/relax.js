@@ -153,6 +153,20 @@ export class Relaxer {
     }
     this.c = new Float32Array(this.constraints);
     this.constraints = null;
+    // Neighbour lists for the smoothing term: course prev/next, parents, children.
+    this.nbr = new Array(this.n);
+    for (const row of rows) {
+      for (let k = 0; k < row.nodes.length; k++) {
+        const id = row.nodes[k];
+        const node = nodes[id];
+        const list = [];
+        if (k > 0) list.push(row.nodes[k - 1]);
+        if (k + 1 < row.nodes.length) list.push(row.nodes[k + 1]);
+        for (const p of node.parents) list.push(p);
+        for (const c of node.children) if (c < this.n) list.push(c);
+        this.nbr[id] = list;
+      }
+    }
     // Target radius per row for work in the round.
     this.rowRadius = rows.map((r) => Math.max(w * 0.8, r.nodes.length * w / (2 * Math.PI)));
   }
@@ -172,7 +186,41 @@ export class Relaxer {
         pos[j] -= dx * f; pos[j + 1] -= dy * f; pos[j + 2] -= dz * f;
       }
       if (this.inRound) this.inflate(0.2);
+      if (it % 2 === 0) this.smooth(0.35);
     }
+  }
+
+  /**
+   * Pull each node toward the average of its neighbours, but only along the local
+   * normal, so the sheet resists buckling while keeping its in-plane structure.
+   */
+  smooth(k) {
+    const pos = this.pos;
+    const out = this.scratch || (this.scratch = new Float32Array(this.n * 3));
+    out.set(pos);
+    for (let i = 0; i < this.n; i++) {
+      const list = this.nbr[i];
+      if (!list || list.length < 3) continue;
+      let ax = 0, ay = 0, az = 0;
+      for (const j of list) { ax += pos[3 * j]; ay += pos[3 * j + 1]; az += pos[3 * j + 2]; }
+      ax /= list.length; ay /= list.length; az /= list.length;
+      // Local normal from the first two neighbour directions that are not parallel.
+      const node = this.nodes[i];
+      const p0 = list[0], p1 = list[1];
+      let ux = pos[3 * p0] - pos[3 * i], uy = pos[3 * p0 + 1] - pos[3 * i + 1], uz = pos[3 * p0 + 2] - pos[3 * i + 2];
+      let vx = pos[3 * p1] - pos[3 * i], vy = pos[3 * p1 + 1] - pos[3 * i + 1], vz = pos[3 * p1 + 2] - pos[3 * i + 2];
+      // Prefer a course direction and a wale direction.
+      const par = node.parents.length ? node.parents[0] : (node.children.length && node.children[0] < this.n ? node.children[0] : null);
+      if (par !== null) { vx = pos[3 * par] - pos[3 * i]; vy = pos[3 * par + 1] - pos[3 * i + 1]; vz = pos[3 * par + 2] - pos[3 * i + 2]; }
+      let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+      const nl = Math.hypot(nx, ny, nz);
+      if (nl < 1e-6) continue;
+      nx /= nl; ny /= nl; nz /= nl;
+      const dx = ax - pos[3 * i], dy = ay - pos[3 * i + 1], dz = az - pos[3 * i + 2];
+      const d = (dx * nx + dy * ny + dz * nz) * k;
+      out[3 * i] += nx * d; out[3 * i + 1] += ny * d; out[3 * i + 2] += nz * d;
+    }
+    pos.set(out);
   }
 
   /** Nudge each node toward its row's target radius about the y axis. */

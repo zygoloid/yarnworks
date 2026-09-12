@@ -43,9 +43,17 @@ function subdivide(pts, start, end, sub, attr) {
  * @param {(i:number)=>[number,number,number]} colorAt colour for sample i
  * @param {boolean} closed
  */
-export function tubeGeometry(pts, radius, radial, colorAt, closed = false) {
+export function tubeGeometry(pts, radius, radial, colorAt, closed = false, twist = null) {
   const n = pts.length / 3;
   const radiusAt = typeof radius === 'function' ? radius : () => radius;
+  // Arc length per sample, for the ply twist.
+  let arc = null;
+  if (twist) {
+    arc = new Float32Array(n);
+    for (let i = 1; i < n; i++) {
+      arc[i] = arc[i - 1] + Math.hypot(pts[3 * i] - pts[3 * i - 3], pts[3 * i + 1] - pts[3 * i - 2], pts[3 * i + 2] - pts[3 * i - 1]);
+    }
+  }
   if (n < 2) return null;
   const positions = new Float32Array(n * radial * 3);
   const normals = new Float32Array(n * radial * 3);
@@ -87,8 +95,22 @@ export function tubeGeometry(pts, radius, radial, colorAt, closed = false) {
       const c = Math.cos(th), s = Math.sin(th);
       const ox = c * nx + s * bx, oy = c * ny + s * by, oz = c * nz + s * bz;
       const k = (i * radial + j) * 3;
-      positions[k] = px + ox * rad; positions[k + 1] = py + oy * rad; positions[k + 2] = pz + oz * rad;
-      normals[k] = ox; normals[k + 1] = oy; normals[k + 2] = oz;
+      let r = rad;
+      let mx = ox, my = oy, mz = oz;
+      if (twist) {
+        // Plies: the radius bulges `plies` times around the circumference, spiralling along the strand.
+        const phase = twist.plies * th - (2 * Math.PI * arc[i]) / twist.pitch;
+        const bump = twist.amount * Math.cos(phase);
+        r = rad * (1 + bump);
+        // Tilt the normal toward the bulges: tangential component from d(radius)/d(theta).
+        const tx = -s * nx + c * bx, ty = -s * ny + c * by, tz = -s * nz + c * bz;
+        const g = twist.amount * twist.plies * Math.sin(phase);
+        mx = ox + g * tx; my = oy + g * ty; mz = oz + g * tz;
+        const ml = Math.hypot(mx, my, mz) || 1;
+        mx /= ml; my /= ml; mz /= ml;
+      }
+      positions[k] = px + ox * r; positions[k + 1] = py + oy * r; positions[k + 2] = pz + oz * r;
+      normals[k] = mx; normals[k + 1] = my; normals[k + 2] = mz;
       colors[k] = cr; colors[k + 1] = cg; colors[k + 2] = cb;
     }
   }
@@ -121,12 +143,13 @@ export function capGeometry(p, radius) {
  */
 export function buildYarnMesh(path, opts) {
   const group = new THREE.Group();
-  const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0.0 });
+  const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, metalness: 0.0 });
+  const twist = opts.twist === false ? null : { plies: 3, amount: 0.16, pitch: opts.radius * 6 };
   for (const strand of path.strands) {
     const { pts, attr } = subdivide(path.points, strand.start, strand.end, opts.subdivisions, path.yarn);
     // Node ids per sample: nearest control point.
     const nodeOf = (i) => path.node[Math.min(strand.end - 1, strand.start + Math.floor(i / opts.subdivisions))];
-    const geo = tubeGeometry(pts, opts.radius, opts.radial, (i) => opts.colorAt(attr[i], nodeOf(i)));
+    const geo = tubeGeometry(pts, opts.radius, opts.radial, (i) => opts.colorAt(attr[i], nodeOf(i)), false, twist);
     if (!geo) continue;
     const mesh = new THREE.Mesh(geo, material);
     group.add(mesh);

@@ -80,6 +80,7 @@ label.inline select { margin-left: 2px; }
 .controls-row .spacer { flex: 1; }
 .readout { font-weight: 600; }
 .readout.small { font-weight: 400; color: var(--muted); }
+.source { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; color: var(--muted); background: #f7f6f3; padding: 4px 8px; border-radius: 3px; white-space: pre-wrap; }
 .muted { color: var(--muted); }
 .readout .next { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #f1f0ec; padding: 1px 5px; border-radius: 3px; font-weight: 500; }
 

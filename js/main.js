@@ -314,8 +314,21 @@ function updatePositionUI() {
   const side = row.isRound ? 'round' : row.side.toUpperCase();
   let text;
   if (row.castOn) text = `Cast on · ${row.stitchesAfter} sts`;
-  else text = `Row ${r} of ${workRows} · ${row.label} (${side}) · ${row.stitchesBefore} → ${row.stitchesAfter} sts`;
+  else {
+    const label = row.label === `Row ${r}` || row.label === `Rnd ${r}` ? '' : ` · ${row.label}`;
+    const sts = row.stitchesBefore === row.stitchesAfter ? `${row.stitchesAfter} sts` : `${row.stitchesBefore} → ${row.stitchesAfter} sts`;
+    text = `${row.isRound ? 'Round' : 'Row'} ${r} of ${workRows}${label} (${side}) · ${sts}`;
+  }
   $('row-readout').textContent = text;
+  // The pattern line this row comes from.
+  const src = $('row-source');
+  if (row.loc && !row.castOn) {
+    const line = (state.text.split('\n')[row.loc.line - 1] || '').trim();
+    src.textContent = line;
+    src.hidden = false;
+  } else {
+    src.hidden = true;
+  }
   const total = row.nodes.length;
   let st;
   if (s >= total) {

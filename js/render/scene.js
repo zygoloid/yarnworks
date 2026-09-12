@@ -18,14 +18,20 @@ export class KnitScene {
     this.controls.dampingFactor = 0.12;
     this.controls.rotateSpeed = 0.7;
 
-    const hemi = new THREE.HemisphereLight(0xffffff, 0x9a9590, 1.1);
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x9d948c, 1.5);
     this.scene.add(hemi);
-    const key = new THREE.DirectionalLight(0xffffff, 1.6);
-    key.position.set(80, 120, 200);
+    const key = new THREE.DirectionalLight(0xfff6ea, 2.3);
+    key.position.set(100, 220, 180);
     this.scene.add(key);
-    const fill = new THREE.DirectionalLight(0xffffff, 0.5);
-    fill.position.set(-120, -40, -160);
+    const fill = new THREE.DirectionalLight(0xe8eef8, 0.9);
+    fill.position.set(-160, -60, 140);
     this.scene.add(fill);
+    const rim = new THREE.DirectionalLight(0xffffff, 1.2);
+    rim.position.set(20, 80, -220);
+    this.scene.add(rim);
+    const under = new THREE.DirectionalLight(0xffffff, 0.5);
+    under.position.set(-40, -200, -60);
+    this.scene.add(under);
 
     this.yarnGroup = new THREE.Group();
     this.needleGroup = new THREE.Group();
@@ -124,7 +130,7 @@ export class KnitScene {
       // Projections along d.
       let lo = Infinity, hi = -Infinity;
       for (const p of points) { const t = (p[0] - c[0]) * d[0] + (p[1] - c[1]) * d[1] + (p[2] - c[2]) * d[2]; lo = Math.min(lo, t); hi = Math.max(hi, t); }
-      const tipLen = radius * 8;
+      const tipLen = radius * 5;
       const tipStart = lo - opts.gap;
       const tipEnd = tipStart - tipLen;
       const tail = hi + opts.tail;
