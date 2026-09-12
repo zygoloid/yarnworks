@@ -245,6 +245,23 @@ export class KnitScene {
 
   setNeedlesVisible(v) { this.needleGroup.visible = v; this.markerGroup.visible = v; this.needsRender = true; }
 
+  /** The camera's placement, for saving. */
+  cameraState() {
+    const c = this.camera, t = this.controls.target;
+    return { position: [c.position.x, c.position.y, c.position.z], target: [t.x, t.y, t.z], up: [c.up.x, c.up.y, c.up.z], near: c.near, far: c.far };
+  }
+
+  /** Restore a placement from cameraState(). */
+  setCameraState(s) {
+    this.camera.position.set(s.position[0], s.position[1], s.position[2]);
+    this.controls.target.set(s.target[0], s.target[1], s.target[2]);
+    this.camera.up.set(s.up[0], s.up[1], s.up[2]);
+    if (s.near && s.far) { this.camera.near = s.near; this.camera.far = s.far; }
+    this.camera.updateProjectionMatrix();
+    this.controls.update();
+    this.needsRender = true;
+  }
+
   /** Frame the camera on the yarn. */
   fit(fromFront = true) {
     const box = new THREE.Box3().setFromObject(this.yarnGroup);

@@ -27,6 +27,8 @@ body { display: flex; flex-direction: column; }
 .brand { font-weight: 600; font-size: 17px; letter-spacing: 0.01em; }
 .tagline { color: var(--muted); }
 .status { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+.file-buttons { display: flex; gap: 6px; margin-left: 16px; }
+.file-buttons button { padding: 4px 10px; font-size: 13px; }
 
 .layout { flex: 1; display: grid; grid-template-columns: 400px 1fr; min-height: 0; }
 .panel { overflow-y: auto; border-right: 1px solid var(--line); background: var(--panel); padding: 8px 16px 24px; }

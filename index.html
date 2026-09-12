@@ -12,6 +12,11 @@
   <div class="brand">Yarnworks</div>
   <div class="tagline">A virtual knitter: write a pattern, watch it knit.</div>
   <div class="status" id="status"></div>
+  <div class="file-buttons">
+    <button id="save-file" title="Save the pattern, yarn settings, view and stitch positions as a JSON file">Save…</button>
+    <button id="load-file" title="Load a saved JSON file">Load…</button>
+    <input type="file" id="load-input" accept=".json,application/json" hidden>
+  </div>
 </header>
 <main class="layout">
   <aside class="panel">

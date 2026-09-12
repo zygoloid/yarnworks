@@ -8,6 +8,7 @@ import { YarnPathBuilder } from './render/yarnpath.js';
 import { KnitScene } from './render/scene.js';
 import { WEIGHTS, NEEDLE_SIZES, weightById, needleLabel, YarnColors, CM_PER_IN, YD_PER_M } from './yarn.js';
 import { EXAMPLES } from './examples.js';
+import { buildSaveFile, serialize, parseSaveFile } from './store.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -41,6 +42,7 @@ let prevKey = null;       // what the warm start positions belong to
 let pathBuilder = null;
 let lastPositions = null;
 let appliedGauge = null;
+let restoredPositions = null; // stitch positions from a loaded file, used once by the next rebuild
 let debounceTimer = null;
 
 // ---------------------------------------------------------------------------
@@ -72,17 +74,10 @@ function initSettings() {
     o.value = w.id; o.textContent = w.name;
     weight.appendChild(o);
   }
-  weight.value = state.weight;
-  fillNeedleSelect();
-  $('gauge-sts').value = state.sts;
-  $('gauge-rows').value = state.rows;
-  $('round').value = state.roundMode;
-  applyUnits();
+  syncSettingsUI();
   for (const b of $('units').querySelectorAll('button')) {
     b.addEventListener('click', () => { state.units = b.dataset.units; applyUnits(); renderYarnControls(); updatePositionUI(); save(); });
   }
-  $('tension').value = state.tension;
-  $('plies').value = String(state.plies || 3);
   $('plies').addEventListener('change', () => { state.plies = parseInt($('plies').value, 10) || 3; scheduleUpdate(true, true); });
   $('tension').addEventListener('change', () => { state.tension = $('tension').value; scheduleUpdate(true); });
 
@@ -124,7 +119,6 @@ function initSettings() {
   });
 
   const pattern = $('pattern');
-  pattern.value = state.text;
   pattern.addEventListener('input', () => {
     state.text = pattern.value;
     example.value = '';
@@ -132,7 +126,6 @@ function initSettings() {
   });
   $('knit').addEventListener('click', () => scheduleUpdate(true));
 
-  $('show-needles').checked = state.showNeedles;
   $('show-needles').addEventListener('change', () => { state.showNeedles = $('show-needles').checked; scene.setNeedlesVisible(state.showNeedles); save(); });
   $('fit').addEventListener('click', () => scene.fit(true));
   $('flip').addEventListener('click', () => scene.flip());
@@ -175,6 +168,19 @@ function initSettings() {
 }
 
 /** Needle sizes as a list, labelled for the current units; keeps a custom size if set. */
+/** Show the current state in the settings controls. */
+function syncSettingsUI() {
+  $('weight').value = state.weight;
+  $('gauge-sts').value = state.sts;
+  $('gauge-rows').value = state.rows;
+  $('round').value = state.roundMode;
+  $('tension').value = state.tension;
+  $('plies').value = String(state.plies || 3);
+  $('show-needles').checked = state.showNeedles;
+  $('pattern').value = state.text;
+  applyUnits(); // also fills the needle list
+}
+
 function fillNeedleSelect() {
   const sel = $('needle');
   sel.innerHTML = '';
@@ -562,13 +568,24 @@ function rebuildScene() {
   // pattern and settings are unchanged so node ids still mean the same thing.
   const key = JSON.stringify([state.text, state.sts, state.rows, state.sizeIndex, state.roundMode, state.markers]);
   if (key !== prevKey) { prevPositions = null; prevKey = key; }
+  // Positions from a loaded file are shown as they were saved.
+  let restored = false;
+  if (restoredPositions) {
+    if (restoredPositions.count === view.nodes.length) {
+      prevPositions = new Map();
+      const xyz = restoredPositions.xyz;
+      for (let i = 0; i < restoredPositions.count; i++) prevPositions.set(i, [xyz[3 * i], xyz[3 * i + 1], xyz[3 * i + 2]]);
+      restored = true;
+    }
+    restoredPositions = null;
+  }
   const relaxer = new Relaxer(view, { stitchWidth: w, rowHeight: h, yarnRadius, prev: prevPositions });
-  const total = prevPositions ? Math.min(300, 60 + Math.round(Math.sqrt(view.nodes.length) * 3)) : Math.min(600, 120 + Math.round(Math.sqrt(view.nodes.length) * 6));
+  const total = restored ? 0 : prevPositions ? Math.min(300, 60 + Math.round(Math.sqrt(view.nodes.length) * 3)) : Math.min(600, 120 + Math.round(Math.sqrt(view.nodes.length) * 6));
   const n = view.nodes.length;
   const quality = n < 3000 ? { subdivisions: 7 } : n < 8000 ? { subdivisions: 5 } : n < 20000 ? { subdivisions: 3 } : { subdivisions: 2 };
   const colors = new YarnColors(state.yarns);
-  sim = { relaxer, w, h, yarnRadius, total, done: 0, batch: 20, raf: null, dragging: false, settleSteps: 0, quality, colors, lastMesh: 0, meshInterval: 40, lastFrame: 0 };
-  relaxer.centre();
+  sim = { relaxer, w, h, yarnRadius, total, done: 0, batch: 20, raf: null, dragging: false, settleSteps: 0, quality, colors, lastMesh: 0, meshInterval: 40, lastFrame: 0, globalDone: restored };
+  if (!restored) relaxer.centre();
   pathBuilder = new YarnPathBuilder(view, relaxer.pos, { stitchWidth: w, rowHeight: h, yarnRadius });
   sim.path = pathBuilder.build();
   scene.setYarn(sim.path, { radius: yarnRadius, plies: state.plies || 3, ...quality, colorAt: (len, id) => colors.colorAt(len, view.nodes[id].yarn) });
@@ -674,6 +691,67 @@ function finalizeSim() {
 }
 
 // ---------------------------------------------------------------------------
+// Save and load files
+
+function initFileButtons() {
+  $('save-file').addEventListener('click', saveToFile);
+  const input = $('load-input');
+  $('load-file').addEventListener('click', () => { input.value = ''; input.click(); });
+  input.addEventListener('change', () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    file.text().then((text) => loadFromFile(text, file.name), (e) => showFileError(`Could not read ${file.name}: ${e.message}`));
+  });
+}
+
+function saveToFile() {
+  const positions = sim ? sim.relaxer.pos : lastPositions;
+  const doc = buildSaveFile({ state, camera: scene.cameraState(), positions, positionCount: view ? view.nodes.length : 0 });
+  const blob = new Blob([serialize(doc)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `yarnworks-${doc.savedAt.slice(0, 10)}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** Restore everything from a save file: pattern and settings, then the shape and the camera. */
+function loadFromFile(text, name) {
+  let file;
+  try { file = parseSaveFile(text); } catch (e) { showFileError(`${name}: ${e.message}`); return; }
+  stopSim();
+  const s = file.state;
+  Object.assign(state, s);
+  state.stop = s.stop === undefined ? null : s.stop;
+  state.lifelines = s.lifelines || [];
+  state.markers = s.markers || [];
+  if (!state.yarns || !state.yarns.A) state.yarns = { A: { kind: 'solid', color: DEFAULT_COLORS.A, stripes: [] } };
+  state.weight = weightById(state.weight).id; // an unknown weight falls back to a known one
+  if (!s.plies) state.plies = weightById(state.weight).plies;
+  if (!s.units) state.units = 'metric';
+  state.moveMode = false;
+  $('move').classList.remove('on');
+  // The saved gauge wins over a Gauge: line in the pattern (the user may have changed it).
+  const gauge = parsePattern(state.text).statements.find((st) => st.type === 'gauge');
+  appliedGauge = gauge ? `${gauge.sts}/${gauge.rows}` : null;
+  syncSettingsUI();
+  $('example').value = '';
+  prevPositions = null; prevKey = null;
+  restoredPositions = file.positions;
+  scene.fitted = !!file.camera;
+  update(false);
+  if (file.camera) scene.setCameraState(file.camera);
+}
+
+function showFileError(message) {
+  showMessages([{ severity: 'error', message, loc: null }]);
+  $('status').textContent = 'File not loaded';
+}
+
+// ---------------------------------------------------------------------------
 // Dragging stitches
 
 let drag = null;
@@ -769,8 +847,9 @@ function addMarkers(seq, pb, needleRadius, w) {
 load();
 scene = new KnitScene($('canvas'));
 initSettings();
+initFileButtons();
 renderHelpers();
 update(false);
 
 // Debug handle (used by tools/shot.mjs and handy in the console).
-window.yarnworks = { scene, state, update, get full() { return full; }, get view() { return view; }, get positions() { return sim ? sim.relaxer.pos : lastPositions; }, get sim() { return sim; }, setStop };
+window.yarnworks = { scene, state, update, get full() { return full; }, get view() { return view; }, get positions() { return sim ? sim.relaxer.pos : lastPositions; }, get sim() { return sim; }, setStop, saveDoc: () => buildSaveFile({ state, camera: scene.cameraState(), positions: sim ? sim.relaxer.pos : lastPositions, positionCount: view ? view.nodes.length : 0 }), serialize, loadFromFile };

@@ -48,6 +48,12 @@ npm test
   shows a cuff-down sock cuff-up. The shape relaxes in front of you; with
   *Move stitches* on, drag a stitch to pull the fabric into a different
   shape and it settles around your hand. *Reset shape* relaxes from scratch.
+- **Save / Load** (top right): *Save…* writes a JSON file holding the
+  pattern, the yarn and gauge settings, the knit-along position, markers and
+  lifelines, the camera, and the position of every stitch, so a shape you
+  have arranged by hand comes back exactly as it was. *Load…* reads one back.
+  The file is plain JSON (`format: "yarnworks"`, `version: 1`) and can be
+  edited by hand; a file with just a pattern in it also loads.
 
 ## Notation
 
