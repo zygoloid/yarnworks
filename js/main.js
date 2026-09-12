@@ -496,7 +496,7 @@ function rebuildScene() {
   const path = pathBuilder.build();
   const colors = new YarnColors(state.yarns);
   const n = view.nodes.length;
-  const quality = n < 2500 ? { subdivisions: 4, radial: 8 } : n < 6000 ? { subdivisions: 3, radial: 6 } : { subdivisions: 2, radial: 5 };
+  const quality = n < 2500 ? { subdivisions: 4, radial: 12 } : n < 6000 ? { subdivisions: 3, radial: 9 } : { subdivisions: 2, radial: 6 };
   scene.setYarn(path, { radius: yarnRadius, ...quality, colorAt: (len, id) => colors.colorAt(len, view.nodes[id].yarn) });
 
   // Needles.

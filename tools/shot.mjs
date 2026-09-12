@@ -4,7 +4,9 @@
 //
 // Usage: node tools/shot.mjs <url> <out.png> [--eval "js"] [--wait ms] [--width w] [--height h]
 import { spawn } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const args = process.argv.slice(2);
 const url = args[0];
@@ -17,7 +19,9 @@ const height = parseInt(opt('--height', '900'), 10);
 const chromePath = process.platform === 'win32' ? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe' : 'google-chrome';
 const port = 9333;
 
-const chrome = spawn(chromePath, [`--remote-debugging-port=${port}`, '--headless=new', '--disable-gpu', '--no-first-run', '--no-sandbox', `--window-size=${width},${height}`, '--user-data-dir=' + (process.env.TEMP || '/tmp') + '\\yarnworks-chrome', 'about:blank'], { stdio: 'ignore' });
+// A fresh profile per run so no stale module is served from the browser cache.
+const profile = mkdtempSync(join(tmpdir(), 'yarnworks-chrome-'));
+const chrome = spawn(chromePath, [`--remote-debugging-port=${port}`, '--headless=new', '--disable-gpu', '--no-first-run', '--no-sandbox', '--disk-cache-size=1', `--window-size=${width},${height}`, '--user-data-dir=' + profile, 'about:blank'], { stdio: 'ignore' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function main() {
@@ -76,4 +80,7 @@ async function main() {
   ws.close();
 }
 
-main().catch((e) => { console.error(e); process.exitCode = 1; }).finally(() => { chrome.kill(); });
+main().catch((e) => { console.error(e); process.exitCode = 1; }).finally(() => {
+  chrome.kill();
+  setTimeout(() => { try { rmSync(profile, { recursive: true, force: true }); } catch (e) { /* ignore */ } }, 500);
+});

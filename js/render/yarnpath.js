@@ -28,7 +28,7 @@ export class YarnPathBuilder {
     this.pos = pos;
     this.w = opts.stitchWidth;
     this.h = opts.rowHeight;
-    this.d = opts.yarnRadius * 1.3;
+    this.d = opts.yarnRadius * 1.0;
     this.frames = new Array(this.nodes.length);
     this.computeFrames();
   }
@@ -145,7 +145,7 @@ export class YarnPathBuilder {
         const nAvg = norm(add(pf.N, N));
         const zsum = (sPrev + s) / 2;
         const kindA = this.nodes[prevId].kind, kindB = node.kind;
-        const level = (kindA === 'sl' || kindB === 'sl') ? -0.5 : -0.65;
+        const level = (kindA === 'sl' || kindB === 'sl') ? -0.5 : -0.8;
         push(add(add(mid, scale(upAvg, level * h)), scale(nAvg, -zsum * d)), node, 0.0);
       } else if (prevNode && !row.castOn) {
         // Row turn. If the previous row ended with a wrap and turn, wrap the yarn around the
@@ -222,18 +222,18 @@ export class YarnPathBuilder {
           // parent's loop and cross in front of the parent's head top; this loop's own head
           // has its shoulders in front (the tops of the V arms) and dips behind at the top,
           // where the next row's legs cross over it.
-          const lb = node.parents.length > 1 ? 0.2 : 0.16;
-          push(add(add(dn(0.55), scale(C, -0.40 * w)), back), node, 0.06);   // behind the parent's arm
-          push(add(add(dn(0.42), scale(C, -lb * w)), front), node, 0.14);    // leg base, inside the parent loop
-          push(add(add(up(0.10), scale(C, -0.27 * w)), front), node, 0.28);  // leg
-          push(add(add(up(0.55), scale(C, -0.45 * w)), front), node, 0.38);  // shoulder
-          push(add(add(up(0.78), scale(C, -0.28 * w)), back), node, 0.44);   // head, dipping behind
-          push(add(up(0.88), back), node, 0.5);                          // head top
-          push(add(add(up(0.78), scale(C, 0.28 * w)), back), node, 0.56);
-          push(add(add(up(0.55), scale(C, 0.45 * w)), front), node, 0.62);
-          push(add(add(up(0.10), scale(C, 0.27 * w)), front), node, 0.72);
-          push(add(add(dn(0.42), scale(C, lb * w)), front), node, 0.86);
-          push(add(add(dn(0.55), scale(C, 0.40 * w)), back), node, 0.94);
+          const lb = node.parents.length > 1 ? 0.21 : 0.17;
+          push(add(add(dn(0.75), scale(C, -0.34 * w)), back), node, 0.06);   // behind the parent's arm
+          push(add(add(dn(0.30), scale(C, -lb * w)), front), node, 0.14);    // leg base, at the parent's head top
+          push(add(add(up(0.08), scale(C, -0.26 * w)), front), node, 0.28);  // leg
+          push(add(add(up(0.50), scale(C, -0.42 * w)), front), node, 0.38);  // shoulder
+          push(add(add(up(0.64), scale(C, -0.27 * w)), back), node, 0.44);   // head, dipping behind
+          push(add(up(0.70), back), node, 0.5);                               // head top
+          push(add(add(up(0.64), scale(C, 0.27 * w)), back), node, 0.56);
+          push(add(add(up(0.50), scale(C, 0.42 * w)), front), node, 0.62);
+          push(add(add(up(0.08), scale(C, 0.26 * w)), front), node, 0.72);
+          push(add(add(dn(0.30), scale(C, lb * w)), front), node, 0.86);
+          push(add(add(dn(0.75), scale(C, 0.34 * w)), back), node, 0.94);
           break;
         }
       }

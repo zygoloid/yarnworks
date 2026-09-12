@@ -36,6 +36,25 @@ function subdivide(pts, start, end, sub, attr) {
 }
 
 /**
+ * Round off tight corners in a sampled polyline with a few passes of [1,2,1]/4
+ * filtering (end points fixed), so bends stay wider than the tube radius and the
+ * tube's cross-sections do not fold through each other.
+ */
+export function smoothPolyline(pts, attr, passes) {
+  const n = pts.length / 3;
+  if (n < 3) return { pts, attr };
+  let a = Float32Array.from(pts), b = new Float32Array(pts.length);
+  for (let p = 0; p < passes; p++) {
+    b.set(a);
+    for (let i = 1; i < n - 1; i++) {
+      for (let k = 0; k < 3; k++) b[3 * i + k] = 0.25 * a[3 * i - 3 + k] + 0.5 * a[3 * i + k] + 0.25 * a[3 * i + 3 + k];
+    }
+    [a, b] = [b, a];
+  }
+  return { pts: a, attr };
+}
+
+/**
  * Build a tube geometry along a polyline.
  * @param {number[]} pts xyz triples (already smoothed)
  * @param {number} radius
@@ -143,10 +162,11 @@ export function capGeometry(p, radius) {
  */
 export function buildYarnMesh(path, opts) {
   const group = new THREE.Group();
-  const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, metalness: 0.0 });
-  const twist = opts.twist === false ? null : { plies: 3, amount: 0.16, pitch: opts.radius * 6 };
+  const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, metalness: 0.0, side: THREE.DoubleSide });
+  const twist = opts.twist === false ? null : { plies: 3, amount: 0.11, pitch: opts.radius * 7 };
   for (const strand of path.strands) {
-    const { pts, attr } = subdivide(path.points, strand.start, strand.end, opts.subdivisions, path.yarn);
+    const sub = subdivide(path.points, strand.start, strand.end, opts.subdivisions, path.yarn);
+    const { pts, attr } = smoothPolyline(sub.pts, sub.attr, opts.subdivisions);
     // Node ids per sample: nearest control point.
     const nodeOf = (i) => path.node[Math.min(strand.end - 1, strand.start + Math.floor(i / opts.subdivisions))];
     const geo = tubeGeometry(pts, opts.radius, opts.radial, (i) => opts.colorAt(attr[i], nodeOf(i)), false, twist);
