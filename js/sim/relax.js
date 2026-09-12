@@ -420,6 +420,13 @@ export class Relaxer {
     });
   }
 
+  /**
+   * Hold the centre of mass at `p` during global steps, or release it with null. With the
+   * centre held, dragging one stitch deforms the piece instead of carrying it along: the
+   * pull is balanced by an equal and opposite force shared by every stitch.
+   */
+  anchorCentre(p) { this.anchor = p ? p.slice() : null; }
+
   /** Pin a node at a position (it is put back there after every iteration), or unpin with null. */
   pin(id, p) {
     if (!this.pins) this.pins = new Map();
@@ -553,19 +560,32 @@ export class Relaxer {
       bx[i] += dx; by[i] += dy; bz[i] += dz;
       bx[j] -= dx; by[j] -= dy; bz[j] -= dz;
     }
-    // Pins: rank-one (Woodbury) corrections to the fixed factorisation.
-    const kPin = 40;
+    // Pins and the centre-of-mass anchor are rank-one (Woodbury) corrections to the fixed
+    // factorisation. The anchor term is kC (u u^T) with u = (1/n, ..., 1/n): first fold it
+    // into the solution and into each pin's response vector, then apply the pins.
+    const kPin = 40, kC = kPin * n;
+    const anchor = this.anchor;
+    let wu = null, denomU = 1;
+    if (anchor) {
+      wu = this.direct.anchorW;
+      if (!wu) { const u = new Float64Array(n).fill(1 / n); wu = new Float64Array(n); this.solveDirect(u, wu); this.direct.anchorW = wu; }
+      let m = 0; for (let i = 0; i < n; i++) m += wu[i]; denomU = 1 + kC * m / n;
+    }
+    const foldAnchor = (v) => { let m = 0; for (let i = 0; i < n; i++) m += v[i]; const f = kC * (m / n) / denomU; for (let i = 0; i < n; i++) v[i] -= f * wu[i]; };
     const pins = this.pins ? [...this.pins.entries()] : [];
     const pinW = pins.map(([id]) => {
       let w = this.direct.pinCache.get(id);
       if (!w) { const e = new Float64Array(n); e[id] = 1; w = new Float64Array(n); this.solveDirect(e, w); this.direct.pinCache.set(id, w); }
+      if (anchor) { w = Float64Array.from(w); foldAnchor(w); }
       return w;
     });
     const comps = [bx, by, bz];
     for (let comp = 0; comp < 3; comp++) {
       const b = comps[comp];
       pins.forEach(([id, p]) => { b[id] += kPin * p[comp]; });
+      if (anchor) { const g = kC * anchor[comp] / n; for (let i = 0; i < n; i++) b[i] += g; }
       this.solveDirect(b, x);
+      if (anchor) foldAnchor(x);
       pins.forEach(([id], pi) => {
         const w = pinW[pi];
         const f = kPin * x[id] / (1 + kPin * w[id]);
@@ -581,11 +601,12 @@ export class Relaxer {
   globalStepCG() {
     const pos = this.pos, n = this.n, N = 3 * n;
     const c = this.c, nc = c.length / 4;
-    const lambda = this.lambda, kPin = 40;
+    const lambda = this.lambda, kPin = 40, kC = kPin * n, anchor = this.anchor;
     if (!this.pd) this.pd = { b: new Float32Array(N), diag: new Float32Array(n), r: new Float32Array(N), z: new Float32Array(N), q: new Float32Array(N), Aq: new Float32Array(N) };
     const { b, diag, r, z, q, Aq } = this.pd;
     for (let i = 0; i < n; i++) { diag[i] = lambda; b[3 * i] = lambda * pos[3 * i]; b[3 * i + 1] = lambda * pos[3 * i + 1]; b[3 * i + 2] = lambda * pos[3 * i + 2]; }
     if (this.pins) for (const [id, p] of this.pins) { diag[id] += kPin; b[3 * id] += kPin * p[0]; b[3 * id + 1] += kPin * p[1]; b[3 * id + 2] += kPin * p[2]; }
+    if (anchor) for (let i = 0; i < n; i++) { diag[i] += kC / (n * n); b[3 * i] += kC * anchor[0] / n; b[3 * i + 1] += kC * anchor[1] / n; b[3 * i + 2] += kC * anchor[2] / n; }
     for (let k = 0; k < nc; k++) {
       const i = c[4 * k], j = c[4 * k + 1], rest = c[4 * k + 2], w = c[4 * k + 3];
       let dx = pos[3 * i] - pos[3 * j], dy = pos[3 * i + 1] - pos[3 * j + 1], dz = pos[3 * i + 2] - pos[3 * j + 2];
@@ -599,6 +620,12 @@ export class Relaxer {
     const applyA = (v, out) => {
       for (let i = 0; i < n; i++) { out[3 * i] = lambda * v[3 * i]; out[3 * i + 1] = lambda * v[3 * i + 1]; out[3 * i + 2] = lambda * v[3 * i + 2]; }
       for (const id of pinIds) { out[3 * id] += kPin * v[3 * id]; out[3 * id + 1] += kPin * v[3 * id + 1]; out[3 * id + 2] += kPin * v[3 * id + 2]; }
+      if (anchor) {
+        let mx = 0, my = 0, mz = 0;
+        for (let i = 0; i < n; i++) { mx += v[3 * i]; my += v[3 * i + 1]; mz += v[3 * i + 2]; }
+        const g = kC / (n * n);
+        for (let i = 0; i < n; i++) { out[3 * i] += g * mx; out[3 * i + 1] += g * my; out[3 * i + 2] += g * mz; }
+      }
       for (let k = 0; k < nc; k++) {
         const i = c[4 * k], j = c[4 * k + 1], w = c[4 * k + 3];
         const dx = v[3 * i] - v[3 * j], dy = v[3 * i + 1] - v[3 * j + 1], dz = v[3 * i + 2] - v[3 * j + 2];
@@ -896,6 +923,15 @@ export class Relaxer {
 
   /** Recentre the piece on the origin (cheap; safe to call every frame). */
   centre() { return this.finish(); }
+
+  /** The mean position of all stitches. */
+  centroid() {
+    const pos = this.pos;
+    let cx = 0, cy = 0, cz = 0;
+    for (let i = 0; i < this.n; i++) { cx += pos[3 * i]; cy += pos[3 * i + 1]; cz += pos[3 * i + 2]; }
+    const n = this.n || 1;
+    return [cx / n, cy / n, cz / n];
+  }
 
   /** Recentre the piece on the origin and return the positions. */
   finish() {

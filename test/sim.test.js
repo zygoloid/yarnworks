@@ -125,3 +125,34 @@ test('rib contracts and corrugates, seed stitch stays flat and wide, garter comp
   const { size } = stats(ps);
   assert.ok(size[2] < 3, `stockinette thickness ${size[2]}`);
 });
+
+test('with the centre of mass anchored, dragging a stitch deforms the swatch instead of moving it', () => {
+  const k = run(`Cast on 15 sts.
+Row 1: k.
+Row 2: p.
+Rows 3-14: repeat rows 1-2.`);
+  const settle = () => { const r = new Relaxer(k, GAUGE); r.relax(40); r.centre(); return r; };
+  const pick = (r) => k.rows[7].nodes[7]; // a stitch in the middle
+  const before = Float64Array.from(settle().pos);
+  // The corner on the side the stitch is pulled away from.
+  const ends = [k.rows[1].nodes[0], k.rows[1].nodes[k.rows[1].nodes.length - 1]];
+  const corner = before[3 * ends[0]] < before[3 * ends[1]] ? ends[0] : ends[1];
+  const pull = (r, anchored) => {
+    const id = pick(r);
+    const target = [r.pos[3 * id] + 30, r.pos[3 * id + 1], r.pos[3 * id + 2]];
+    if (anchored) r.anchorCentre(r.centroid());
+    r.pin(id, target);
+    r.relax(30);
+    const c = r.centroid();
+    const dist = (pos) => Math.hypot(pos[3 * id] - pos[3 * corner], pos[3 * id + 1] - pos[3 * corner + 1], pos[3 * id + 2] - pos[3 * corner + 2]);
+    return { centroidShift: Math.hypot(c[0], c[1], c[2]), cornerShift: r.pos[3 * corner] - before[3 * corner], stretch: dist(r.pos) - dist(before) };
+  };
+  const free = pull(settle(), false);
+  const held = pull(settle(), true);
+  // Unanchored, the pull mostly carries the whole swatch along; anchored, the centre stays
+  // put and a far corner moves much less than the pulled stitch.
+  assert.ok(free.centroidShift > 10, `free centroid moved ${free.centroidShift}`);
+  assert.ok(held.centroidShift < 1, `anchored centroid moved ${held.centroidShift}`);
+  assert.ok(Math.abs(held.cornerShift) < 15, `anchored corner moved ${held.cornerShift}`);
+  assert.ok(held.stretch > 3 * Math.max(1, free.stretch), `stretch anchored ${held.stretch} vs free ${free.stretch}`);
+});

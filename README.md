@@ -45,9 +45,12 @@ npm test
   marker at the current stitch, so the model matches what is on your needles.
 - **View**: drag to rotate, scroll to zoom, right-drag to pan. Needles can
   be hidden; *Flip* looks at the other side of the work, *Turn upside down*
-  shows a cuff-down sock cuff-up. The shape relaxes in front of you; with
-  *Move stitches* on, drag a stitch to pull the fabric into a different
-  shape and it settles around your hand. *Reset shape* relaxes from scratch.
+  shows a cuff-down sock cuff-up. The shape relaxes in front of you; drag a
+  stitch to pull the fabric into a different shape and it settles around
+  your hand, with the piece's centre of mass held in place so the pull
+  deforms it rather than carrying it off. Turn *Move stitches* off to rotate
+  by dragging anywhere, useful when zoomed right in. *Reset shape* relaxes
+  from scratch.
 - **Save / Load** (top right): *Save…* writes a JSON file holding the
   pattern, the yarn and gauge settings, the knit-along position, markers and
   lifelines, the camera, and the position of every stitch, so a shape you

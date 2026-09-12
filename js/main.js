@@ -30,7 +30,7 @@ const state = {
   lifelines: [],
   markers: [],
   showNeedles: true,
-  moveMode: false,
+  moveMode: true, // drag stitches to reshape; off, dragging anywhere rotates the view
 };
 
 let scene;
@@ -60,7 +60,7 @@ function load() {
     if (!state.yarns || !state.yarns.A) state.yarns = { A: { kind: 'solid', color: DEFAULT_COLORS.A, stripes: [] } };
     if (!s.plies) state.plies = weightById(state.weight).plies;
     if (!s.units) state.units = 'metric';
-    state.moveMode = false;
+    if (typeof state.moveMode !== 'boolean') state.moveMode = true;
   } catch (e) { /* ignore */ }
 }
 
@@ -732,8 +732,6 @@ function loadFromFile(text, name) {
   state.weight = weightById(state.weight).id; // an unknown weight falls back to a known one
   if (!s.plies) state.plies = weightById(state.weight).plies;
   if (!s.units) state.units = 'metric';
-  state.moveMode = false;
-  $('move').classList.remove('on');
   // The saved gauge wins over a Gauge: line in the pattern (the user may have changed it).
   const gauge = parsePattern(state.text).statements.find((st) => st.type === 'gauge');
   appliedGauge = gauge ? `${gauge.sts}/${gauge.rows}` : null;
@@ -759,11 +757,13 @@ let drag = null;
 function initDragging() {
   const canvas = $('canvas');
   const btn = $('move');
+  btn.classList.toggle('on', state.moveMode);
   btn.addEventListener('click', () => {
     state.moveMode = !state.moveMode;
     btn.classList.toggle('on', state.moveMode);
     canvas.style.cursor = '';
     if (!state.moveMode) scene.setHighlight(-1);
+    save();
   });
   $('reset-shape').addEventListener('click', () => { prevPositions = null; prevKey = null; scheduleUpdate(true); });
 
@@ -778,6 +778,9 @@ function initDragging() {
     const origin = [pos[3 * id], pos[3 * id + 1], pos[3 * id + 2]];
     drag = { id, origin };
     sim.dragging = true;
+    // Hold the centre of mass where it is, so the pull deforms the piece rather than
+    // carrying the whole thing along with the pointer.
+    sim.relaxer.anchorCentre(sim.relaxer.centroid());
     sim.relaxer.pin(id, origin.slice());
     canvas.style.cursor = 'grabbing';
     if (!sim.raf) sim.raf = requestAnimationFrame(stepSim);
@@ -800,6 +803,7 @@ function initDragging() {
   const end = (ev) => {
     if (!drag || !sim) return;
     sim.relaxer.pin(drag.id, null);
+    sim.relaxer.anchorCentre(null);
     drag = null;
     sim.dragging = false;
     // Settle with the global solver for a while, then finish.
