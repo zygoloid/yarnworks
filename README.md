@@ -13,10 +13,12 @@ The app uses ES modules, so it has to be served over HTTP rather than opened
 as a file. Any static server will do:
 
 ```
-python3 -m http.server 8000
+python3 serve.py
 ```
 
-then open <http://localhost:8000/>.
+then open <http://localhost:8000/>. (`serve.py` is a plain static server that
+disables browser caching; with `python3 -m http.server` a browser may keep
+old modules after a reload, so force-refresh if you use that instead.)
 
 Tests (parser, knitter, simulation) run under Node:
 
@@ -103,5 +105,10 @@ The page exposes `window.yarnworks` (scene, state, knit results, positions,
   wale, shear and bending terms, plus a gentle pressure for tubes) to find
   the shape of the fabric.
 - `js/render/` builds the yarn path, one continuous loop shape per stitch
-  in a local frame, and renders it as a tube with three.js, along with
-  needles, markers and lifelines.
+  in a local frame, and renders it with three.js along with needles,
+  markers and lifelines. The yarn itself is not a polygon mesh: each short
+  segment of the smoothed path is drawn as one camera-facing quad, and a
+  fragment shader intersects the view ray with the exact cylinder for that
+  segment (mitred against its neighbours), writing the true depth, normal,
+  ply twist and fibre texture per pixel. That keeps the yarn perfectly round
+  at any zoom with two triangles per segment.

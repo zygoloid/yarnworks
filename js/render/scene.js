@@ -59,6 +59,7 @@ export class KnitScene {
     const parent = this.canvas.parentElement;
     const w = parent.clientWidth || 300, h = parent.clientHeight || 300;
     this.renderer.setSize(w, h, false);
+    if (this.yarnMaterial) this.yarnMaterial.uniforms.viewportHeight.value = h * this.renderer.getPixelRatio();
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.needsRender = true;
@@ -67,6 +68,7 @@ export class KnitScene {
   static dispose(group) {
     for (const child of group.children) {
       if (child.geometry) child.geometry.dispose();
+      if (child.material && child.material.isShaderMaterial) child.material.dispose();
       if (child.children) KnitScene.dispose(child);
     }
     group.clear();
@@ -82,7 +84,10 @@ export class KnitScene {
 
   setYarn(path, opts) {
     KnitScene.dispose(this.yarnGroup);
-    this.yarnGroup.add(buildYarnMesh(path, opts));
+    const g = buildYarnMesh(path, opts);
+    this.yarnMaterial = g.userData.yarnMaterial;
+    this.yarnMaterial.uniforms.viewportHeight.value = this.renderer.getSize(new THREE.Vector2()).y * this.renderer.getPixelRatio();
+    this.yarnGroup.add(g);
     this.needsRender = true;
   }
 

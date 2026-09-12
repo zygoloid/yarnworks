@@ -1,6 +1,7 @@
 // Turns a polyline into a smooth tube mesh with per-vertex colours.
 
 import * as THREE from 'three';
+import { buildCapsuleMesh } from './capsules.js';
 
 /**
  * Catmull-Rom subdivision of a polyline.
@@ -148,32 +149,29 @@ export function tubeGeometry(pts, radius, radial, colorAt, closed = false, twist
   return geo;
 }
 
-/** End caps: small spheres at the start and end of a strand look better than open tubes. */
-export function capGeometry(p, radius) {
-  const g = new THREE.SphereGeometry(radius, 8, 6);
-  g.translate(p[0], p[1], p[2]);
-  return g;
-}
-
 /**
- * Build the yarn mesh for a yarn path.
+ * Build the yarn for a yarn path as ray-cast capsules (see capsules.js).
  * @param {object} path result of YarnPathBuilder.build()
- * @param {object} opts {radius, subdivisions, radial, colorForYarn(len, nodeId) -> [r,g,b]}
+ * @param {object} opts {radius, subdivisions, colorAt(len, nodeId) -> [r,g,b]}
  */
 export function buildYarnMesh(path, opts) {
-  const group = new THREE.Group();
-  const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, metalness: 0.0, side: THREE.DoubleSide });
-  const twist = opts.twist === false ? null : { plies: 3, amount: 0.11, pitch: opts.radius * 7 };
+  const strands = [];
   for (const strand of path.strands) {
     const sub = subdivide(path.points, strand.start, strand.end, opts.subdivisions, path.yarn);
     const { pts, attr } = smoothPolyline(sub.pts, sub.attr, opts.subdivisions);
-    // Node ids per sample: nearest control point.
-    const nodeOf = (i) => path.node[Math.min(strand.end - 1, strand.start + Math.floor(i / opts.subdivisions))];
-    const geo = tubeGeometry(pts, opts.radius, opts.radial, (i) => opts.colorAt(attr[i], nodeOf(i)), false, twist);
-    if (!geo) continue;
-    const mesh = new THREE.Mesh(geo, material);
-    group.add(mesh);
+    const n = pts.length / 3;
+    const colors = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      const nodeId = path.node[Math.min(strand.end - 1, strand.start + Math.floor(i / opts.subdivisions))];
+      const c = opts.colorAt(attr[i], nodeId);
+      colors[3 * i] = c[0]; colors[3 * i + 1] = c[1]; colors[3 * i + 2] = c[2];
+    }
+    strands.push({ pts, colors });
   }
+  const group = new THREE.Group();
+  const mesh = buildCapsuleMesh(strands, { radius: opts.radius, plies: 3, plyAmount: 0.12, plyPitch: opts.radius * 7 });
+  group.add(mesh);
+  group.userData.yarnMaterial = mesh.material;
   return group;
 }
 
