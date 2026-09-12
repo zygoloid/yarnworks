@@ -350,12 +350,19 @@ export class Relaxer {
     });
   }
 
+  /** Pin a node at a position (it is put back there after every iteration), or unpin with null. */
+  pin(id, p) {
+    if (!this.pins) this.pins = new Map();
+    if (p) this.pins.set(id, p); else this.pins.delete(id);
+  }
+
   /** Run `iters` Gauss-Seidel iterations. */
   relax(iters) {
     const pos = this.pos;
     const c = this.c;
     const nc = c.length / 4;
     for (let it = 0; it < iters; it++) {
+      this.iteration = (this.iteration || 0) + 1;
       for (let k = 0; k < nc; k++) {
         const i = c[4 * k] * 3, j = c[4 * k + 1] * 3, rest = c[4 * k + 2], stiff = c[4 * k + 3];
         const dx = pos[j] - pos[i], dy = pos[j + 1] - pos[i + 1], dz = pos[j + 2] - pos[i + 2];
@@ -366,12 +373,79 @@ export class Relaxer {
       }
       if (this.anyRound) this.inflate(0.2);
       if (it % 3 === 0) this.smooth(0.45);
+      if (this.iteration % 3 === 0) this.collide();
+      if (this.pins) for (const [id, p] of this.pins) { pos[3 * id] = p[0]; pos[3 * id + 1] = p[1]; pos[3 * id + 2] = p[2]; }
     }
   }
 
   /**
-   * Pull each node toward the average of its neighbours, but only along the local
-   * normal, so the sheet resists buckling while keeping its in-plane structure.
+   * Keep the fabric from passing through itself: loops that are not near each other in
+   * the stitch graph must stay at least most of a stitch width apart in space.
+   */
+  collide() {
+    const pos = this.pos, n = this.n;
+    const cell = this.w;
+    const minD = 0.75 * this.w;
+    const minD2 = minD * minD;
+    if (!this.adjacent) {
+      // Pairs linked by a constraint are neighbours in the fabric and may be close:
+      // a compact per-node list (up to 24 entries) of constrained partners.
+      const A = 24;
+      const adjList = new Int32Array(n * A).fill(-1);
+      const cnt = new Uint8Array(n);
+      const add = (i, j) => { if (cnt[i] < A) adjList[i * A + cnt[i]++] = j; };
+      const c = this.c;
+      for (let k = 0; k < c.length; k += 4) { add(c[k], c[k + 1]); add(c[k + 1], c[k]); }
+      this.adjacent = adjList; this.adjA = A;
+      // Open-addressing hash table from packed cell coordinates to a linked list of nodes.
+      let size = 1; while (size < 2 * n) size <<= 1;
+      this.hKeys = new Int32Array(size); this.hHead = new Int32Array(size); this.hNext = new Int32Array(n);
+      this.hCell = new Int32Array(n);
+      this.hMask = size - 1;
+    }
+    const adj = this.adjacent, A = this.adjA;
+    const keys = this.hKeys, head = this.hHead, next = this.hNext, cellOf = this.hCell, mask = this.hMask;
+    keys.fill(0); head.fill(-1);
+    const pack = (x, y, z) => (((x + 512) & 1023) << 20) | (((y + 512) & 1023) << 10) | ((z + 512) & 1023);
+    const hash = (k) => (Math.imul(k, 2654435761) >>> 0) & mask;
+    const inv = 1 / cell;
+    for (let i = 0; i < n; i++) {
+      const k = pack(Math.floor(pos[3 * i] * inv), Math.floor(pos[3 * i + 1] * inv), Math.floor(pos[3 * i + 2] * inv)) | 0x40000000;
+      cellOf[i] = k;
+      let slot = hash(k);
+      while (keys[slot] !== 0 && keys[slot] !== k) slot = (slot + 1) & mask;
+      keys[slot] = k;
+      next[i] = head[slot];
+      head[slot] = i;
+    }
+    for (let i = 0; i < n; i++) {
+      const k0 = cellOf[i];
+      const x0 = (k0 >> 20) & 1023, y0 = (k0 >> 10) & 1023, z0 = k0 & 1023;
+      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
+        const k = ((((x0 + dx) & 1023) << 20) | (((y0 + dy) & 1023) << 10) | ((z0 + dz) & 1023)) | 0x40000000;
+        let slot = hash(k);
+        while (keys[slot] !== 0 && keys[slot] !== k) slot = (slot + 1) & mask;
+        if (keys[slot] !== k) continue;
+        for (let j = head[slot]; j >= 0; j = next[j]) {
+          if (j <= i) continue;
+          let linked = false;
+          for (let a = i * A, e = a + A; a < e; a++) { const q = adj[a]; if (q < 0) break; if (q === j) { linked = true; break; } }
+          if (linked) continue;
+          const ex = pos[3 * j] - pos[3 * i], ey = pos[3 * j + 1] - pos[3 * i + 1], ez = pos[3 * j + 2] - pos[3 * i + 2];
+          const d2 = ex * ex + ey * ey + ez * ez;
+          if (d2 >= minD2 || d2 < 1e-12) continue;
+          const d = Math.sqrt(d2);
+          const push = (minD - d) / d * 0.25;
+          pos[3 * i] -= ex * push; pos[3 * i + 1] -= ey * push; pos[3 * i + 2] -= ez * push;
+          pos[3 * j] += ex * push; pos[3 * j + 1] += ey * push; pos[3 * j + 2] += ez * push;
+        }
+      }
+    }
+  }
+
+  /**
+   * Pull each node toward the average of its neighbours' mid-surface positions, but only
+   * along the local normal, so the sheet resists buckling while folds are kept.
    */
   smooth(k) {
     const pos = this.pos;
@@ -502,6 +576,9 @@ export class Relaxer {
       }
     }
   }
+
+  /** Recentre the piece on the origin (cheap; safe to call every frame). */
+  centre() { return this.finish(); }
 
   /** Recentre the piece on the origin and return the positions. */
   finish() {

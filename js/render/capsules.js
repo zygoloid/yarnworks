@@ -367,16 +367,12 @@ function transportNormals(pts) {
  *   pts: xyz per point; colors: linear rgb per point.
  * @param {object} opts {radius, plies, plyAmount, plyPitch}
  */
-export function buildCapsuleMesh(strands, opts) {
-  let total = 0;
-  for (const s of strands) total += Math.max(0, s.pts.length / 3 - 1);
-  const pa = new Float32Array(total * 3), pb = new Float32Array(total * 3);
-  const ca = new Float32Array(total * 3), cb = new Float32Array(total * 3);
-  const sab = new Float32Array(total * 2), na = new Float32Array(total * 3);
-  const da = new Float32Array(total * 3), db = new Float32Array(total * 3);
-  const nbArr = new Float32Array(total * 3);
+/** Fill the per-segment geometry attributes (positions, frames, arc lengths) from strand polylines. */
+function fillSegments(strands, buf, withColors) {
+  const { pa, pb, ca, cb, sab, na, nb: nbArr, da, db } = buf;
   let k = 0;
   const box = new THREE.Box3();
+  const v = new THREE.Vector3();
   for (const s of strands) {
     const pts = s.pts, cols = s.colors;
     const n = pts.length / 3;
@@ -402,18 +398,42 @@ export function buildCapsuleMesh(strands, opts) {
       const ba = bis(i), bb = bis(i + 1);
       for (let c = 0; c < 3; c++) {
         pa[3 * k + c] = pts[3 * i + c]; pb[3 * k + c] = pts[3 * i + 3 + c];
-        ca[3 * k + c] = cols[3 * i + c]; cb[3 * k + c] = cols[3 * i + 3 + c];
+        if (withColors) { ca[3 * k + c] = cols[3 * i + c]; cb[3 * k + c] = cols[3 * i + 3 + c]; }
         na[3 * k + c] = normals[3 * i + c];
         nbArr[3 * k + c] = normals[3 * i + 3 + c];
         da[3 * k + c] = ba[c]; db[3 * k + c] = bb[c];
       }
       sab[2 * k] = arc; sab[2 * k + 1] = arc + len;
       arc += len;
-      box.expandByPoint(new THREE.Vector3(pts[3 * i], pts[3 * i + 1], pts[3 * i + 2]));
+      box.expandByPoint(v.set(pts[3 * i], pts[3 * i + 1], pts[3 * i + 2]));
       k++;
     }
-    if (n) box.expandByPoint(new THREE.Vector3(pts[3 * n - 3], pts[3 * n - 2], pts[3 * n - 1]));
+    if (n) box.expandByPoint(v.set(pts[3 * n - 3], pts[3 * n - 2], pts[3 * n - 1]));
   }
+  return { count: k, box };
+}
+
+/** Update an existing capsule mesh with new strand positions (same segment count). */
+export function updateCapsuleMesh(mesh, strands) {
+  const g = mesh.geometry;
+  const buf = mesh.userData.buffers;
+  const { box } = fillSegments(strands, buf, false);
+  for (const name of ['pa', 'pb', 'na', 'nb', 'da', 'db', 'sab']) g.attributes[name].needsUpdate = true;
+  box.expandByScalar(mesh.material.uniforms.radius.value * 2);
+  g.boundingBox = box;
+  g.boundingSphere = box.getBoundingSphere(new THREE.Sphere());
+}
+
+export function buildCapsuleMesh(strands, opts) {
+  let total = 0;
+  for (const s of strands) total += Math.max(0, s.pts.length / 3 - 1);
+  const pa = new Float32Array(total * 3), pb = new Float32Array(total * 3);
+  const ca = new Float32Array(total * 3), cb = new Float32Array(total * 3);
+  const sab = new Float32Array(total * 2), na = new Float32Array(total * 3);
+  const da = new Float32Array(total * 3), db = new Float32Array(total * 3);
+  const nbArr = new Float32Array(total * 3);
+  const buffers = { pa, pb, ca, cb, sab, na, nb: nbArr, da, db };
+  const { box } = fillSegments(strands, buffers, true);
   const geo = new THREE.InstancedBufferGeometry();
   // A quad: corners in [-1, 1]^2.
   geo.setAttribute('position', new THREE.Float32BufferAttribute([-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0], 3));
@@ -453,5 +473,6 @@ export function buildCapsuleMesh(strands, opts) {
   });
   const mesh = new THREE.Mesh(geo, material);
   mesh.frustumCulled = true;
+  mesh.userData.buffers = buffers;
   return mesh;
 }

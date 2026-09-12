@@ -44,7 +44,10 @@ npm test
 - **Markers & lifelines**: add a lifeline at the current row or a stitch
   marker at the current stitch, so the model matches what is on your needles.
 - **View**: drag to rotate, scroll to zoom, right-drag to pan. Needles can
-  be hidden; *Flip* looks at the other side of the work.
+  be hidden; *Flip* looks at the other side of the work, *Turn upside down*
+  shows a cuff-down sock cuff-up. The shape relaxes in front of you; with
+  *Move stitches* on, drag a stitch to pull the fabric into a different
+  shape and it settles around your hand. *Reset shape* relaxes from scratch.
 
 ## Notation
 

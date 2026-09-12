@@ -29,6 +29,7 @@ const state = {
   lifelines: [],
   markers: [],
   showNeedles: true,
+  moveMode: false,
 };
 
 let scene;
@@ -57,6 +58,7 @@ function load() {
     if (!state.yarns || !state.yarns.A) state.yarns = { A: { kind: 'solid', color: DEFAULT_COLORS.A, stripes: [] } };
     if (!s.plies) state.plies = weightById(state.weight).plies;
     if (!s.units) state.units = 'metric';
+    state.moveMode = false;
   } catch (e) { /* ignore */ }
 }
 
@@ -135,6 +137,7 @@ function initSettings() {
   $('fit').addEventListener('click', () => scene.fit(true));
   $('flip').addEventListener('click', () => scene.flip());
   $('upside').addEventListener('click', () => scene.turnOver());
+  initDragging();
 
   // Position controls.
   $('row-slider').addEventListener('input', () => { setStop(parseInt($('row-slider').value, 10), null); });
@@ -538,41 +541,96 @@ function update(colorsOnly) {
   status.textContent = `${view.nodes.length} stitches shown · ${ms.toFixed(0)} ms`;
 }
 
+// The relaxation runs incrementally in an animation loop so the piece can be watched
+// taking shape, and so stitches can be dragged while it settles.
+let sim = null;
+
+function stopSim() {
+  if (sim && sim.raf) cancelAnimationFrame(sim.raf);
+  if (sim) sim.raf = null;
+}
+
 function rebuildScene() {
+  stopSim();
   scene.clear();
-  if (!view || view.nodes.length === 0) return;
+  if (!view || view.nodes.length === 0) { sim = null; return; }
   const w = 100 / state.sts, h = 100 / state.rows;
   // Tension: at a fixed gauge, tighter knitting means the yarn fills more of each stitch.
   const yarnRadius = w * ({ loose: 0.18, normal: 0.21, tight: 0.24 }[state.tension] || 0.21);
 
-  // Relax positions (warm start from the previous layout so knitting along feels stable,
-  // but only if the pattern and settings are unchanged so node ids still mean the same thing).
+  // Warm start from the previous layout so knitting along feels stable, but only if the
+  // pattern and settings are unchanged so node ids still mean the same thing.
   const key = JSON.stringify([state.text, state.sts, state.rows, state.sizeIndex, state.roundMode, state.markers]);
   if (key !== prevKey) { prevPositions = null; prevKey = key; }
   const relaxer = new Relaxer(view, { stitchWidth: w, rowHeight: h, yarnRadius, prev: prevPositions });
-  const iters = Math.min(500, 100 + Math.round(Math.sqrt(view.nodes.length) * 5));
-  relaxer.relax(iters);
-  const pos = relaxer.finish();
+  const total = prevPositions ? Math.min(300, 60 + Math.round(Math.sqrt(view.nodes.length) * 3)) : Math.min(600, 120 + Math.round(Math.sqrt(view.nodes.length) * 6));
+  const n = view.nodes.length;
+  const quality = n < 3000 ? { subdivisions: 7 } : n < 8000 ? { subdivisions: 5 } : n < 20000 ? { subdivisions: 3 } : { subdivisions: 2 };
+  const colors = new YarnColors(state.yarns);
+  sim = { relaxer, w, h, yarnRadius, total, done: 0, batch: 20, raf: null, dragging: false, quality, colors, lastMesh: 0, meshInterval: 40, lastFrame: 0 };
+  relaxer.centre();
+  pathBuilder = new YarnPathBuilder(view, relaxer.pos, { stitchWidth: w, rowHeight: h, yarnRadius });
+  scene.setYarn(pathBuilder.build(), { radius: yarnRadius, plies: state.plies || 3, ...quality, colorAt: (len, id) => colors.colorAt(len, view.nodes[id].yarn) });
+  scene.needleGroup.visible = false; scene.markerGroup.visible = false; scene.lifelineGroup.visible = false;
+  if (!scene.fitted) { scene.fit(true); scene.fitted = true; }
+  sim.raf = requestAnimationFrame(stepSim);
+}
+
+function stepSim() {
+  const s = sim;
+  if (!s) return;
+  s.raf = null;
+  const t0 = performance.now();
+  // If frames that redrew the yarn took long (a slow GPU or a huge piece), redraw less often
+  // so the relaxation itself is not starved.
+  if (s.lastFrame && s.redrew) {
+    const frame = t0 - s.lastFrame;
+    if (frame > 120) s.meshInterval = Math.min(1500, s.meshInterval * 1.5);
+    else if (frame < 50) s.meshInterval = Math.max(40, s.meshInterval * 0.8);
+  }
+  s.lastFrame = t0;
+  s.redrew = false;
+  const remaining = s.total - s.done;
+  const k = s.dragging ? Math.min(s.batch, 12) : Math.min(s.batch, remaining);
+  if (k > 0) { s.relaxer.relax(k); s.done += k; }
+  const dt = performance.now() - t0;
+  // Aim for about 18 ms of relaxation per frame.
+  s.batch = Math.max(3, Math.min(80, Math.round(k * 18 / Math.max(dt, 1))));
+  if (!s.dragging) s.relaxer.centre();
+  // Redraw, but not more often than the mesh update costs allow.
+  const now = performance.now();
+  if (now - s.lastMesh > (s.dragging ? 30 : s.meshInterval) || s.done >= s.total) {
+    pathBuilder = new YarnPathBuilder(view, s.relaxer.pos, { stitchWidth: s.w, rowHeight: s.h, yarnRadius: s.yarnRadius });
+    scene.updateYarn(pathBuilder.build());
+    s.lastMesh = performance.now();
+    s.redrew = true;
+  }
+  if (s.done < s.total || s.dragging) {
+    $('status').textContent = s.dragging ? `${view.nodes.length} stitches · moving` : `${view.nodes.length} stitches · relaxing ${Math.round(100 * s.done / s.total)}%`;
+    s.raf = requestAnimationFrame(stepSim);
+    return;
+  }
+  finalizeSim();
+}
+
+/** The relaxation has settled: record positions, draw needles, markers and lifelines. */
+function finalizeSim() {
+  const s = sim;
+  const pos = s.relaxer.pos;
   prevPositions = new Map();
   for (let i = 0; i < view.nodes.length; i++) prevPositions.set(i, [pos[3 * i], pos[3 * i + 1], pos[3 * i + 2]]);
   lastPositions = pos;
-
-  pathBuilder = new YarnPathBuilder(view, pos, { stitchWidth: w, rowHeight: h, yarnRadius });
-  const path = pathBuilder.build();
-  const colors = new YarnColors(state.yarns);
-  const n = view.nodes.length;
-  const quality = n < 3000 ? { subdivisions: 7 } : n < 8000 ? { subdivisions: 5 } : n < 20000 ? { subdivisions: 3 } : { subdivisions: 2 };
-  scene.setYarn(path, { radius: yarnRadius, plies: state.plies || 3, ...quality, colorAt: (len, id) => colors.colorAt(len, view.nodes[id].yarn) });
-
-  // Needles.
+  pathBuilder = new YarnPathBuilder(view, pos, { stitchWidth: s.w, rowHeight: s.h, yarnRadius: s.yarnRadius });
+  scene.updateYarn(pathBuilder.build());
+  KnitScene.dispose(scene.needleGroup); KnitScene.dispose(scene.markerGroup); KnitScene.dispose(scene.lifelineGroup);
+  const w = s.w;
   const needleRadius = (state.needle || 4) / 2;
   const heads = (ids) => ids.filter((e) => typeof e === 'number').map((id) => pathBuilder.headCentre(id));
   const showNeedles = !(state.stop === null && view.finished);
   if (showNeedles) {
     if (view.inRound) {
       const seq = view.right.concat(view.left);
-      const pts = heads(seq);
-      scene.addNeedle(pts, { circular: true, radius: needleRadius });
+      scene.addNeedle(heads(seq), { circular: true, radius: needleRadius });
       addMarkers(seq, pathBuilder, needleRadius, w);
     } else {
       const rightPts = heads(view.right).reverse(); // tip first
@@ -584,16 +642,75 @@ function rebuildScene() {
       addMarkers(view.left, pathBuilder, needleRadius, w);
     }
   }
-  // Lifelines.
   for (const r of state.lifelines) {
     const row = view.rows[r];
     if (!row || !row.complete) continue;
     const ids = row.nodes.filter((id) => view.nodes[id].passedOver === null);
-    scene.addLifeline(ids.map((id) => pathBuilder.headCentre(id)), yarnRadius * 0.4);
+    scene.addLifeline(ids.map((id) => pathBuilder.headCentre(id)), s.yarnRadius * 0.4);
   }
   scene.setNeedlesVisible(state.showNeedles);
-  if (!scene.fitted) { scene.fit(true); scene.fitted = true; }
-  else scene.needsRender = true;
+  scene.lifelineGroup.visible = true;
+  scene.needsRender = true;
+  $('status').textContent = `${view.nodes.length} stitches shown`;
+}
+
+// ---------------------------------------------------------------------------
+// Dragging stitches
+
+let drag = null;
+
+function initDragging() {
+  const canvas = $('canvas');
+  const btn = $('move');
+  btn.addEventListener('click', () => { state.moveMode = !state.moveMode; btn.classList.toggle('on', state.moveMode); canvas.style.cursor = state.moveMode ? 'grab' : ''; });
+  $('reset-shape').addEventListener('click', () => { prevPositions = null; prevKey = null; scheduleUpdate(true); });
+
+  canvas.addEventListener('pointerdown', (ev) => {
+    if (!state.moveMode || ev.button !== 0 || !sim) return;
+    const pos = sim.relaxer.pos;
+    const id = scene.pickNode(ev.clientX, ev.clientY, pos);
+    if (id < 0) return;
+    ev.preventDefault();
+    scene.controls.enabled = false;
+    try { canvas.setPointerCapture(ev.pointerId); } catch (e) { /* synthetic events have no active pointer */ }
+    const origin = [pos[3 * id], pos[3 * id + 1], pos[3 * id + 2]];
+    // Neighbourhood that follows the grabbed stitch, with a smooth falloff.
+    const R = 3.5 * sim.w;
+    const follow = [];
+    for (let i = 0; i < view.nodes.length; i++) {
+      const d = Math.hypot(pos[3 * i] - origin[0], pos[3 * i + 1] - origin[1], pos[3 * i + 2] - origin[2]);
+      if (d < R && i !== id) follow.push([i, (1 - d / R) ** 2]);
+    }
+    drag = { id, origin, follow, last: [0, 0, 0] };
+    sim.dragging = true;
+    sim.relaxer.pin(id, origin.slice());
+    canvas.style.cursor = 'grabbing';
+    if (!sim.raf) sim.raf = requestAnimationFrame(stepSim);
+  });
+  canvas.addEventListener('pointermove', (ev) => {
+    if (!drag || !sim) return;
+    const p = scene.pointerOnPlane(ev.clientX, ev.clientY, drag.origin);
+    if (!p) return;
+    const delta = [p[0] - drag.origin[0], p[1] - drag.origin[1], p[2] - drag.origin[2]];
+    const step = [delta[0] - drag.last[0], delta[1] - drag.last[1], delta[2] - drag.last[2]];
+    drag.last = delta;
+    const pos = sim.relaxer.pos;
+    for (const [i, wgt] of drag.follow) { pos[3 * i] += step[0] * wgt; pos[3 * i + 1] += step[1] * wgt; pos[3 * i + 2] += step[2] * wgt; }
+    sim.relaxer.pin(drag.id, p);
+    pos[3 * drag.id] = p[0]; pos[3 * drag.id + 1] = p[1]; pos[3 * drag.id + 2] = p[2];
+  });
+  const end = (ev) => {
+    if (!drag || !sim) return;
+    sim.relaxer.pin(drag.id, null);
+    drag = null;
+    sim.dragging = false;
+    sim.total = sim.done + Math.min(300, 60 + Math.round(Math.sqrt(view.nodes.length) * 3));
+    scene.controls.enabled = true;
+    canvas.style.cursor = state.moveMode ? 'grab' : '';
+    if (!sim.raf) sim.raf = requestAnimationFrame(stepSim);
+  };
+  canvas.addEventListener('pointerup', end);
+  canvas.addEventListener('pointercancel', end);
 }
 
 /** Direction the needle tail should extend, for a needle with a single stitch. */
@@ -633,4 +750,4 @@ renderHelpers();
 update(false);
 
 // Debug handle (used by tools/shot.mjs and handy in the console).
-window.yarnworks = { scene, state, update, get full() { return full; }, get view() { return view; }, get positions() { return lastPositions; }, setStop };
+window.yarnworks = { scene, state, update, get full() { return full; }, get view() { return view; }, get positions() { return sim ? sim.relaxer.pos : lastPositions; }, get sim() { return sim; }, setStop };

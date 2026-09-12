@@ -1,7 +1,7 @@
 // Turns a polyline into a smooth tube mesh with per-vertex colours.
 
 import * as THREE from 'three';
-import { buildCapsuleMesh } from './capsules.js';
+import { buildCapsuleMesh, updateCapsuleMesh } from './capsules.js';
 
 /**
  * Catmull-Rom subdivision of a polyline.
@@ -155,23 +155,31 @@ export function tubeGeometry(pts, radius, radial, colorAt, closed = false, twist
  * @param {object} opts {radius, subdivisions, colorAt(len, nodeId) -> [r,g,b]}
  */
 export function buildYarnMesh(path, opts) {
-  const strands = [];
-  for (const strand of path.strands) {
-    const sub = subdivide(path.points, strand.start, strand.end, opts.subdivisions, path.yarn);
-    const { pts, attr } = smoothPolyline(sub.pts, sub.attr, opts.subdivisions);
-    const n = pts.length / 3;
-    const colors = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) {
-      const nodeId = path.node[Math.min(strand.end - 1, strand.start + Math.floor(i / opts.subdivisions))];
-      const c = opts.colorAt(attr[i], nodeId);
-      colors[3 * i] = c[0]; colors[3 * i + 1] = c[1]; colors[3 * i + 2] = c[2];
+  const strandsOf = (p, withColors) => {
+    const strands = [];
+    for (const strand of p.strands) {
+      const sub = subdivide(p.points, strand.start, strand.end, opts.subdivisions, p.yarn);
+      const { pts, attr } = smoothPolyline(sub.pts, sub.attr, opts.subdivisions);
+      let colors = null;
+      if (withColors) {
+        const n = pts.length / 3;
+        colors = new Float32Array(n * 3);
+        for (let i = 0; i < n; i++) {
+          const nodeId = p.node[Math.min(strand.end - 1, strand.start + Math.floor(i / opts.subdivisions))];
+          const c = opts.colorAt(attr[i], nodeId);
+          colors[3 * i] = c[0]; colors[3 * i + 1] = c[1]; colors[3 * i + 2] = c[2];
+        }
+      }
+      strands.push({ pts, colors });
     }
-    strands.push({ pts, colors });
-  }
+    return strands;
+  };
   const group = new THREE.Group();
-  const mesh = buildCapsuleMesh(strands, { radius: opts.radius, plies: opts.plies || 3 });
+  const mesh = buildCapsuleMesh(strandsOf(path, true), { radius: opts.radius, plies: opts.plies || 3 });
   group.add(mesh);
   group.userData.yarnMaterial = mesh.material;
+  /** Move the yarn to a new path with the same stitches (positions only; colours stay). */
+  group.userData.update = (newPath) => updateCapsuleMesh(mesh, strandsOf(newPath, false));
   return group;
 }
 

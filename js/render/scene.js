@@ -82,6 +82,50 @@ export class KnitScene {
     this.needsRender = true;
   }
 
+  /** Update the yarn mesh in place from a new path (positions only). */
+  updateYarn(path) {
+    const g = this.yarnGroup.children[0];
+    if (g && g.userData.update) { g.userData.update(path); this.needsRender = true; }
+  }
+
+  /** Index of the node whose projected position is nearest the pointer, within `px` pixels, or -1. */
+  pickNode(clientX, clientY, positions, px = 14) {
+    const rect = this.canvas.getBoundingClientRect();
+    const sx = ((clientX - rect.left) / rect.width) * 2 - 1;
+    const sy = -((clientY - rect.top) / rect.height) * 2 + 1;
+    this.camera.updateMatrixWorld();
+    const m = new THREE.Matrix4().multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse);
+    const e = m.elements;
+    let best = -1, bestD = (px / rect.width * 2) ** 2, bestZ = Infinity;
+    const n = positions.length / 3;
+    for (let i = 0; i < n; i++) {
+      const x = positions[3 * i], y = positions[3 * i + 1], z = positions[3 * i + 2];
+      const cw = e[3] * x + e[7] * y + e[11] * z + e[15];
+      if (cw <= 0) continue;
+      const cx = (e[0] * x + e[4] * y + e[8] * z + e[12]) / cw;
+      const cy = (e[1] * x + e[5] * y + e[9] * z + e[13]) / cw;
+      const cz = (e[2] * x + e[6] * y + e[10] * z + e[14]) / cw;
+      const dx = cx - sx, dy = (cy - sy) * (rect.height / rect.width);
+      const d = dx * dx + dy * dy;
+      // Prefer the nearest to the pointer; among near ties, the one closest to the camera.
+      if (d < bestD * 0.25 && cz < bestZ || (d < bestD && best < 0)) { best = i; bestD = Math.max(d, bestD * 0.25); bestZ = cz; }
+    }
+    return best;
+  }
+
+  /** World point where the pointer ray meets the plane through `origin` facing the camera. */
+  pointerOnPlane(clientX, clientY, origin) {
+    const rect = this.canvas.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(ndc, this.camera);
+    const normal = new THREE.Vector3();
+    this.camera.getWorldDirection(normal);
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal, new THREE.Vector3(origin[0], origin[1], origin[2]));
+    const hit = new THREE.Vector3();
+    return ray.ray.intersectPlane(plane, hit) ? [hit.x, hit.y, hit.z] : null;
+  }
+
   setYarn(path, opts) {
     KnitScene.dispose(this.yarnGroup);
     const g = buildYarnMesh(path, opts);
