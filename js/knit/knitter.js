@@ -445,6 +445,7 @@ export class Knitter {
     this.sideKnown = true;
     const row = this.startRow(labelText, s.loc, s.isRound);
     row.stmt = s;
+    if (this.pendingResume) { row.resume = this.pendingResume; this.pendingResume = null; }
     row.patternLabel = label !== undefined ? label : null;
     this.executeItems(s.instructions);
     this.endOfRow(s, isRepeat);
@@ -1000,10 +1001,19 @@ export class Knitter {
     // After the last flat row the worked stitches are on the right needle in that row's
     // working order; in round order (right side facing) a wrong-side row reads backwards.
     const worked = this.side === 'ws' ? this.right.slice().reverse() : this.right.slice();
-    this.left = this.flat.held.concat(worked, this.left);
+    // The working yarn is where the last row ended: after a right-side row it sits by the
+    // first held stitch, so the round carries on into the held stitches; after a
+    // wrong-side row it sits at the other edge, so the round works back across the
+    // flap's own stitches first (a sock's heel stitches before its gusset pick-ups).
+    const yarnAtStart = this.side === 'ws';
+    this.left = yarnAtStart ? worked.concat(this.left, this.flat.held) : this.flat.held.concat(worked, this.left);
     this.right = [];
+    this.flat.workedFirst = yarnAtStart ? new Set(worked.filter((e) => typeof e === 'number')) : null;
     this.flat.endRow = this.rows.length;
     this.flat.resumed = true;
+    // The next round starts here; remember the geometry it rejoins so the layout can
+    // grow the work toward the held stitches (a sock's foot goes toward the instep).
+    this.pendingResume = { flapStart: this.flat.startRow, flapEnd: this.rows.length, held: this.flat.held.filter((e) => typeof e === 'number') };
     this.inRound = this.flat.wasRound;
     this.joined = this.inRound;
     this.side = 'rs';
@@ -1034,6 +1044,9 @@ export class Knitter {
     // pick-up runs along edge L and the second along edge R. Picking the edges the other
     // way round joins the foot to the gusset with a half twist.
     const first = this.pickUpFirstEdge;
+    if (flap.edgesUsed === 0 && flap.workedFirst && this.left.some((e) => typeof e === 'number' && flap.workedFirst.has(e))) {
+      throw this.err('The working yarn is at the far end of the flap after a wrong-side row: work across the flap\'s stitches before picking up along its edge', item.loc);
+    }
     const edge = flap.edgesUsed === 0 ? first : (first === 'L' ? 'R' : 'L');
     flap.edgesUsed++;
     const chain = rows.map((r) => {

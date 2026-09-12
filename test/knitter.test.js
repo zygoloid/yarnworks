@@ -248,7 +248,7 @@ Repeat rows 3-4 until there are 8 (11) sts.
 Next row: sl1, p to end.
 Gusset:
 Change to MC.
-Next rnd: pick up and knit 5 (6) sts along the edge of the heel flap, k12 (15), pm, pick up and knit 5 (6) sts along the other edge of the heel flap, k8 (11), k5 (6). 30 (38) sts
+Next rnd: k8 (11), pick up and knit 5 (6) sts along the edge of the heel flap, k12 (15), pm, pick up and knit 5 (6) sts along the other edge of the heel flap, k13 (17). 30 (38) sts
 Rnd 1: k to marker, sm, k1, ssk, k to 3 sts before end, k2tog, k1.
 Rnd 2: k.
 Repeat rnds 1-2 until there are 24 (30) sts.

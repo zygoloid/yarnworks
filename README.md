@@ -80,7 +80,9 @@ Garment construction (see the sock example): section headings such as
 `Heel flap:` with measurements relative to the section (`until heel flap
 measures 5 cm`); `Work the next 28 sts back and forth` to work a flap on
 part of the stitches while the rest are held; `k to 1 st before gap` when
-turning a heel; `pick up and knit 14 sts along the edge of the heel flap`;
+turning a heel; `pick up and knit 14 sts along the edge of the heel flap`
+(the knitter tracks which edge the yarn is at: after a wrong-side row, work
+back across the flap's stitches before picking up);
 a round that works past its end moves the beginning of the round; `Graft
 the remaining sts together` for a Kitchener-stitched toe; `Graft the last
 row to the cast-on edge` closes a strip into a ring or a tube into a torus,

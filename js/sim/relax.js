@@ -264,9 +264,13 @@ export class Relaxer {
       if (nl > 1e-6) {
         let area = [nx / nl, ny / nl, nz / nl];
         const prevDir = this.growthDir(prev);
-        // Just after a flat section (a heel flap), the work turns a corner: take the new
-        // round's own normal, oriented away from the round before. Otherwise orient it to
-        // agree with the direction the work was already growing in.
+        // Just after a flat section (a heel flap), the work turns a corner: grow toward
+        // the stitches that were held while the flap was worked (the instep), so the foot
+        // folds the right way and the fabric keeps its right side out.
+        if (prev.resume) {
+          const toward = this.resumeDirection(prev.resume, prevDir);
+          if (toward) { this.growth.set(row.index, toward); return toward; }
+        }
         const pp = row.index > 1 ? rows[row.index - 2] : null;
         const justResumed = pp && !pp.isRound;
         const agree = area[0] * prevDir[0] + area[1] * prevDir[1] + area[2] * prevDir[2];
@@ -293,6 +297,25 @@ export class Relaxer {
     }
     this.growth.set(row.index, dir);
     return dir;
+  }
+
+  /**
+   * Direction from a flap to the stitches held while it was worked, with the flap's own
+   * growth direction removed: where the work goes after rejoining in the round.
+   */
+  resumeDirection(resume, along) {
+    const rows = this.knit.rows;
+    let fx = 0, fy = 0, fz = 0, fn = 0;
+    for (let r = resume.flapStart; r < resume.flapEnd; r++) for (const id of rows[r].nodes) { fx += this.pos[3 * id]; fy += this.pos[3 * id + 1]; fz += this.pos[3 * id + 2]; fn++; }
+    let hx = 0, hy = 0, hz = 0, hn = 0;
+    for (const id of resume.held) { hx += this.pos[3 * id]; hy += this.pos[3 * id + 1]; hz += this.pos[3 * id + 2]; hn++; }
+    if (!fn || !hn) return null;
+    let dx = hx / hn - fx / fn, dy = hy / hn - fy / fn, dz = hz / hn - fz / fn;
+    const d = dx * along[0] + dy * along[1] + dz * along[2];
+    dx -= along[0] * d; dy -= along[1] * d; dz -= along[2] * d;
+    const l = Math.hypot(dx, dy, dz);
+    if (l < 1e-6) return null;
+    return [dx / l, dy / l, dz / l];
   }
 
   /** Approximate knitting direction at node `id` from its row's neighbours or side. */
