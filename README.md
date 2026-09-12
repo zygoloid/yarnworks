@@ -102,7 +102,9 @@ the remaining sts together` for a Kitchener-stitched toe; `Graft the last
 row to the cast-on edge` closes a strip into a ring or a tube into a torus,
 and `... with a half twist` (or `inside out`) makes a Möbius strip or a
 Klein bottle instead, which the knitter duly warns about. `Gauge: 40 sts
-and 56 rows = 10 cm` in a pattern sets the gauge. Lines beginning with
+and 56 rows = 10 cm` in a pattern sets the gauge. A repeat `to marker` gets a warning if it is not worked at all (the marker is
+already next) or if it ends at a different marker from the one that was ahead
+when it began. Lines beginning with
 `Note:` are ignored.
 
 Repeats: `*…; rep from * to end`, `rep from * to last 3 sts`,

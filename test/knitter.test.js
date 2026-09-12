@@ -396,3 +396,18 @@ Row 1: k7, bind off 6 sts, k to end.`);
   assert.deepEqual(ops.slice(7, 14), Array(7).fill('bo'));
   assert.equal(ops.length, 20);
 });
+
+test('repeat-to-marker warnings: not worked at all, and ending at a different marker', () => {
+  const r = run(`Cast on 6 sts.
+Join in the round.
+Rnd 1: k2, pm, k2, pm, k2, pm.
+Rnd 2: (k1) to marker, sm, k to end.
+Rnd 3: k2, (k1, m1) to marker, k to end.
+Rnd 4: (k to marker, rm, k to marker) to marker, k to end.`);
+  assert.deepEqual(errors(r), []);
+  const warnings = r.messages.filter((m) => m.severity === 'warning');
+  assert.deepEqual(warnings.map((m) => m.loc.line), [5, 6]);
+  assert.match(warnings[0].message, /Rnd 3: the group "k1, m1" is not worked at all here, because the marker is already next/);
+  assert.match(warnings[1].message, /Rnd 4: the group .* ends at a different marker from the one that was ahead when it began/);
+  assert.deepEqual(counts(r), [6, 6, 6, 6, 6]);
+});

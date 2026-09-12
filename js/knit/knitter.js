@@ -858,6 +858,12 @@ export class Knitter {
     }
     if (times.kind === 'toMarker') {
       const before = this.num(times.before, loc);
+      // A knitter reads "to marker" as the marker that is ahead when the repeat begins, and
+      // expects to work the repeat at least once; warn when a pattern relies on either not holding.
+      const target = this.nextMarker();
+      if (this.atMarker(before)) {
+        this.message('warning', `${this.rowLabel()}: the ${what} "${this.describeItems(body)}" is not worked at all here, because the marker is already ${before ? `${before} st${before === 1 ? '' : 's'} ahead` : 'next'}`, loc);
+      }
       let guard = 0;
       while (!this.atMarker(before)) {
         if (this.remaining() <= before) throw this.err(`"to marker" but there is no marker ahead on the needle`, loc);
@@ -866,6 +872,9 @@ export class Knitter {
         if (this.remaining() === rem) throw this.err(`The ${what} "${this.describeItems(body)}" does not use any stitches`, loc);
         if (this.remaining() < before) throw this.err(`The repeat went past the marker`, loc);
         if (++guard > 100000) throw this.err('Repeat did not finish', loc);
+      }
+      if (target && this.nextMarker() !== target) {
+        this.message('warning', `${this.rowLabel()}: the ${what} "${this.describeItems(body)}" ends at a different marker from the one that was ahead when it began (the repeat passed, slipped or removed that marker)`, loc);
       }
       return;
     }
@@ -883,6 +892,8 @@ export class Knitter {
   }
 
   hasMarkerAhead() { return this.left.some((e) => typeof e !== 'number'); }
+  /** The first marker ahead on the left needle, or null. */
+  nextMarker() { for (const e of this.left) if (typeof e !== 'number') return e; return null; }
 
   doToTarget(item) {
     const t = item.target;

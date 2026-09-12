@@ -2,3 +2,5 @@ node_modules/
 .DS_Store
 # Third-party pattern transcriptions we cannot publish (a separate private repo).
 private-patterns/
+# The Turing-completeness paper and its artefacts (a separate repo).
+turing-paper/
