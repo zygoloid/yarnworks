@@ -95,3 +95,33 @@ Row 2: p.`);
   const path = new YarnPathBuilder(k, pos, { ...GAUGE, yarnRadius: 0.9 }).build();
   assert.equal(path.strands.length, 2);
 });
+
+function widthOfRow(k, pos, r) {
+  let mn = Infinity, mx = -Infinity;
+  for (const id of k.rows[r].nodes) { mn = Math.min(mn, pos[3 * id]); mx = Math.max(mx, pos[3 * id]); }
+  return mx - mn;
+}
+function rowY(k, pos, r) { return k.rows[r].nodes.reduce((a, id) => a + pos[3 * id + 1], 0) / k.rows[r].nodes.length; }
+
+test('rib contracts and corrugates, seed stitch stays flat and wide, garter compresses rows', () => {
+  const opts = { ...GAUGE, yarnRadius: 0.95, iterations: 400 };
+  const stock = run(`Cast on 20 sts.\nRow 1: k.\nRow 2: p.\nRepeat rows 1-2 five times.`);
+  const rib = run(`Cast on 20 sts.\nRow 1 (RS): *k1, p1; rep from * to end.\nRow 2: *k1, p1; rep from * to end.\nRepeat rows 1-2 five times.`);
+  const seed = run(`Cast on 21 sts.\nRow 1: *k1, p1; rep from * to last st, k1.\nRepeat row 1 ten times.`);
+  const garter = run(`Cast on 20 sts.\nRow 1: k.\nRow 2: k.\nRepeat rows 1-2 five times.`);
+  const ps = relaxKnit(stock, opts), pr = relaxKnit(rib, opts), pe = relaxKnit(seed, opts), pg = relaxKnit(garter, opts);
+  const wStock = widthOfRow(stock, ps, 6), wRib = widthOfRow(rib, pr, 6), wSeed = widthOfRow(seed, pe, 6) * 19 / 20;
+  assert.ok(wRib < 0.72 * wStock, `1x1 rib width ${wRib} vs stockinette ${wStock}`);
+  assert.ok(Math.abs(wSeed - wStock) < 0.1 * wStock, `seed width ${wSeed} vs stockinette ${wStock}`);
+  // Rib corrugates: knit and purl columns sit on opposite sides.
+  const row = rib.rows[6];
+  let zk = 0, zp = 0, nk = 0, np = 0;
+  for (const id of row.nodes) { const z = pr[3 * id + 2]; if (rib.nodes[id].face === 'k') { zk += z; nk++; } else { zp += z; np++; } }
+  assert.ok(zk / nk - zp / np > 1.5, `rib depth ${zk / nk - zp / np}`);
+  // Garter rows are closer together than stockinette rows.
+  const hStock = (rowY(stock, ps, 10) - rowY(stock, ps, 2)) / 8, hGarter = (rowY(garter, pg, 10) - rowY(garter, pg, 2)) / 8;
+  assert.ok(hGarter < 0.85 * hStock, `garter row height ${hGarter} vs stockinette ${hStock}`);
+  // Stockinette stays flat.
+  const { size } = stats(ps);
+  assert.ok(size[2] < 3, `stockinette thickness ${size[2]}`);
+});

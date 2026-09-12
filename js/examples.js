@@ -22,6 +22,21 @@ Rows 11-16: repeat rows 9-10. (16 sts)
 Bind off.`,
   },
   {
+    name: 'k2 p1 rib',
+    text: `Cast on 27 sts.
+Row 1 (RS): *k2, p1; rep from * to end.
+Row 2: *k1, p2; rep from * to end.
+Repeat rows 1-2 until piece measures 6 cm.
+Bind off in pattern.`,
+  },
+  {
+    name: 'Seed stitch',
+    text: `Cast on 21 sts.
+Row 1: *k1, p1; rep from * to last st, k1.
+Repeat row 1 until piece measures 5 cm.
+Bind off.`,
+  },
+  {
     name: 'Eyelet lace',
     text: `Cast on 23 sts.
 Row 1 (RS): k1, *yo, k2tog; rep from * to end.

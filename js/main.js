@@ -533,8 +533,8 @@ function rebuildScene() {
   // but only if the pattern and settings are unchanged so node ids still mean the same thing).
   const key = JSON.stringify([state.text, state.sts, state.rows, state.sizeIndex, state.roundMode, state.markers]);
   if (key !== prevKey) { prevPositions = null; prevKey = key; }
-  const relaxer = new Relaxer(view, { stitchWidth: w, rowHeight: h, prev: prevPositions });
-  const iters = Math.min(300, 60 + Math.round(Math.sqrt(view.nodes.length) * 3));
+  const relaxer = new Relaxer(view, { stitchWidth: w, rowHeight: h, yarnRadius, prev: prevPositions });
+  const iters = Math.min(500, 100 + Math.round(Math.sqrt(view.nodes.length) * 5));
   relaxer.relax(iters);
   const pos = relaxer.finish();
   prevPositions = new Map();

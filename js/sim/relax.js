@@ -3,8 +3,11 @@
 // Each node (loop) is a point. Constraints pull course neighbours to the
 // stitch width, parents/children to the row height, and add diagonal and
 // bending terms so the fabric behaves like a sheet rather than a net of
-// hinges. Work in the round starts on a cylinder and gets a gentle outward
-// pressure so tubes stay open.
+// hinges. Knit and purl faces sit on opposite sides of the fabric's
+// mid-surface, and where a face change runs along a line the fabric folds
+// there and contracts (rib across the course, garter along the wale).
+// Work in the round starts on a cylinder and gets a gentle outward pressure
+// so tubes stay open.
 
 export class Relaxer {
   /**
@@ -20,8 +23,96 @@ export class Relaxer {
     this.pos = new Float32Array(this.n * 3);
     this.inRound = knit.inRound;
     this.constraints = []; // flat arrays below
+    // Knit and purl faces sit on opposite sides of the fabric's mid-surface. Each loop
+    // gets a preferred offset along the surface normal (toward the right side for a
+    // knit face, away for a purl face); links that cross a face change fold the fabric
+    // there and pull the columns or rows together, which is what makes rib and garter
+    // corrugate and contract.
+    const r = opts.yarnRadius || 0.21 * this.w;
+    this.offsetAmp = 1.4 * r;
+    this.pullCourse = 0.6;  // in-plane rest length of a course link across a face change (rib)
+    this.pullWale = 0.72;   // the same along the wale (garter)
+    this.off = new Float32Array(this.n);
+    for (let i = 0; i < this.n; i++) this.off[i] = this.faceSign(this.nodes[i]) * this.offsetAmp;
+    // Neutral loops (cast on, bind off, yarn overs) follow the face structure of the
+    // loops they connect to, so edges contract with the fabric.
+    this.pull = new Int8Array(this.n);
+    for (let i = 0; i < this.n; i++) {
+      const node = this.nodes[i];
+      let f = this.faceSign(node);
+      if (!f) for (const c of node.children) { if (c < this.n && (f = this.faceSign(this.nodes[c]))) break; }
+      if (!f) for (const p of node.parents) { if ((f = this.faceSign(this.nodes[p]))) break; }
+      this.pull[i] = f;
+    }
     this.buildInitial(opts.prev || null);
     this.buildConstraints();
+  }
+
+  /** +1 for a knit face (as seen from the right side), -1 for purl, 0 for neutral loops. */
+  faceSign(node) {
+    if (node.kind !== 'k' && node.kind !== 'p') return 0;
+    if (node.op === 'bo' || node.chain) return 0;
+    return node.face === 'p' ? -1 : 1;
+  }
+
+  /** Rest length of a link with in-plane length `plane` between nodes i and j, including their offsets. */
+  restWith(i, j, plane) {
+    const d = this.off[i] - this.off[j];
+    return Math.hypot(plane, d);
+  }
+
+  /** In-plane length of a course link: shorter across a face change. */
+  /**
+   * In-plane length of a course link. A face change pulls the columns together only
+   * when the same change runs up the wale (a fold line, as in rib); where faces also
+   * alternate between rows (seed stitch) there is nothing to fold along.
+   */
+  coursePlane(i, j, depth = 0) {
+    const d = this.pull[i] - this.pull[j];
+    if (d === 0) return this.w;
+    const a = this.nodes[i], b = this.nodes[j];
+    // A link with a neutral loop (cast on, bind off) follows the real link beside it.
+    if ((!this.faceSign(a) || !this.faceSign(b)) && depth < 2) {
+      const ca = a.children[0], cb = b.children[0];
+      if (ca !== undefined && cb !== undefined && ca < this.n && cb < this.n && this.nodes[ca].row === this.nodes[cb].row) return this.coursePlane(ca, cb, depth + 1);
+      const pa = a.parents[0], pb = b.parents[0];
+      if (pa !== undefined && pb !== undefined && this.nodes[pa].row === this.nodes[pb].row) return this.coursePlane(pa, pb, depth + 1);
+      return this.w;
+    }
+    let same = 0, total = 0;
+    const check = (x, y) => {
+      if (x === undefined || y === undefined || x === null || y === null) return;
+      const fx = this.faceSign(this.nodes[x]), fy = this.faceSign(this.nodes[y]);
+      if (!fx || !fy) return;
+      total++;
+      if (Math.sign(fx - fy) === Math.sign(d)) same++;
+    };
+    check(a.parents[0], b.parents[0]);
+    check(a.children[0] < this.n ? a.children[0] : undefined, b.children[0] < this.n ? b.children[0] : undefined);
+    const consistency = total ? same / total : 0.5;
+    return this.w * (1 - (1 - this.pullCourse) * consistency);
+  }
+
+  /** In-plane length of a wale link; the fold runs along the course (garter ridges). */
+  walePlane(i, p) {
+    const d = this.pull[i] - this.pull[p];
+    if (d === 0) return this.h;
+    const a = this.nodes[i], b = this.nodes[p];
+    const ra = this.knit.rows[a.row], rb = this.knit.rows[b.row];
+    let same = 0, total = 0;
+    const check = (x, y) => {
+      if (x === undefined || y === undefined) return;
+      const fx = this.faceSign(this.nodes[x]), fy = this.faceSign(this.nodes[y]);
+      if (!fx || !fy) return;
+      total++;
+      if (Math.sign(fx - fy) === Math.sign(d)) same++;
+    };
+    // The neighbouring column: next stitch in this row against the parent's neighbour on the matching side.
+    const sameDir = ra.isRound || ra.side === rb.side;
+    check(ra.nodes[a.pos + 1], rb.nodes[b.pos + (sameDir ? 1 : -1)]);
+    check(ra.nodes[a.pos - 1], rb.nodes[b.pos - (sameDir ? 1 : -1)]);
+    const consistency = total ? same / total : 0.5;
+    return this.h * (1 - (1 - this.pullWale) * consistency);
   }
 
   get(i) { return [this.pos[3 * i], this.pos[3 * i + 1], this.pos[3 * i + 2]]; }
@@ -82,10 +173,16 @@ export class Relaxer {
         const dir = this.courseDir(node.pos > 0 ? row.nodes[node.pos - 1] : i);
         x += dir[0] * node.cableShift * w; y += dir[1] * node.cableShift * w; z += dir[2] * node.cableShift * w;
       }
-      if (node.layer) {
-        // Crossed stitches start in front of / behind the fabric surface.
+      // Offsets are relative to the fabric's mid-surface; the reference nodes already
+      // carry their own offsets, so apply only the difference (plus any cable layer).
+      let refOff = 0;
+      if (node.parents.length) { for (const p of node.parents) refOff += this.off[p]; refOff /= node.parents.length; }
+      else if (node.bar && node.bar.some((b) => b !== null)) { const ids = node.bar.filter((b) => b !== null); for (const p of ids) refOff += this.off[p]; refOff /= ids.length; }
+      else if (!row.castOn && node.pos > 0) refOff = this.off[row.nodes[node.pos - 1]];
+      const o = node.layer * this.h * 0.4 + (this.off[i] - refOff);
+      if (o !== 0) {
         const nrm = this.normalAt(x, y, z, node);
-        x += nrm[0] * node.layer * this.h * 0.4; y += nrm[1] * node.layer * this.h * 0.4; z += nrm[2] * node.layer * this.h * 0.4;
+        x += nrm[0] * o; y += nrm[1] * o; z += nrm[2] * o;
       }
       this.set(i, x + jitter(), y + jitter(), z + jitter());
     }
@@ -132,8 +229,11 @@ export class Relaxer {
         const id = ids[k];
         const node = nodes[id];
         // Course neighbours.
-        if (k + 1 < ids.length) this.addC(id, ids[k + 1], w, 1.0);
-        if (k + 2 < ids.length) this.addC(id, ids[k + 2], 2 * w, 0.25);
+        if (k + 1 < ids.length) this.addC(id, ids[k + 1], this.restWith(id, ids[k + 1], this.coursePlane(id, ids[k + 1])), 1.0);
+        if (k + 2 < ids.length) {
+          const mid = ids[k + 1], far = ids[k + 2];
+          this.addC(id, far, this.restWith(id, far, this.coursePlane(id, mid) + this.coursePlane(mid, far)), 0.25);
+        }
         // Wale.
         const np = node.parents.length;
         for (let pi = 0; pi < np; pi++) {
@@ -145,15 +245,16 @@ export class Relaxer {
           // from increases/decreases, plus any cable crossing.
           const shift = (ci - (nc - 1) / 2) - (pi - (np - 1) / 2) + (node.cableShift || 0);
           const dx = shift * w;
-          this.addC(id, p, Math.hypot(h, dx), 1.0);
+          const hp = this.walePlane(id, p);
+          this.addC(id, p, this.restWith(id, p, Math.hypot(hp, dx)), 1.0);
           // Diagonals to the parent's course neighbours (which are one column further along).
           const prow = rows[parent.row];
           const pk = parent.pos;
           const sameDir = row.isRound || prow.side === row.side ? 1 : -1; // parent row worked in the same direction?
-          if (pk > 0) this.addC(id, prow.nodes[pk - 1], Math.hypot(h, dx + sameDir * w * 1), 0.4);
-          if (pk + 1 < prow.nodes.length) this.addC(id, prow.nodes[pk + 1], Math.hypot(h, dx - sameDir * w * 1), 0.4);
+          if (pk > 0) { const q = prow.nodes[pk - 1]; this.addC(id, q, this.restWith(id, q, Math.hypot(hp, dx + sameDir * this.coursePlane(p, q))), 0.4); }
+          if (pk + 1 < prow.nodes.length) { const q = prow.nodes[pk + 1]; this.addC(id, q, this.restWith(id, q, Math.hypot(hp, dx - sameDir * this.coursePlane(p, q))), 0.4); }
           // Bending along the wale.
-          if (parent.parents.length) this.addC(id, parent.parents[0], Math.hypot(2 * h, dx), 0.3);
+          if (parent.parents.length) { const g = parent.parents[0]; this.addC(id, g, this.restWith(id, g, Math.hypot(hp + this.walePlane(p, g), dx)), 0.3); }
         }
         if (node.bar) {
           for (const b of node.bar) if (b !== null) this.addC(id, b, Math.hypot(h, w / 2), 0.8);
@@ -163,9 +264,10 @@ export class Relaxer {
       if (row.isRound && row.index + 1 < rows.length && ids.length) {
         const next = rows[row.index + 1];
         if (next.isRound && next.nodes.length) {
-          this.addC(ids[ids.length - 1], next.nodes[0], w, 1.0);
-          if (ids.length > 1) this.addC(ids[ids.length - 2], next.nodes[0], 2 * w, 0.25);
-          if (next.nodes.length > 1) this.addC(ids[ids.length - 1], next.nodes[1], 2 * w, 0.25);
+          const a = ids[ids.length - 1], b = next.nodes[0];
+          this.addC(a, b, this.restWith(a, b, this.coursePlane(a, b)), 1.0);
+          if (ids.length > 1) { const a2 = ids[ids.length - 2]; this.addC(a2, b, this.restWith(a2, b, this.coursePlane(a2, a) + this.coursePlane(a, b)), 0.25); }
+          if (next.nodes.length > 1) { const b2 = next.nodes[1]; this.addC(a, b2, this.restWith(a, b2, this.coursePlane(a, b) + this.coursePlane(b, b2)), 0.25); }
         }
       }
     }
@@ -185,8 +287,12 @@ export class Relaxer {
         this.nbr[id] = list;
       }
     }
-    // Target radius per row for work in the round.
-    this.rowRadius = rows.map((r) => Math.max(w * 0.8, r.nodes.length * w / (2 * Math.PI)));
+    // Target radius per row for work in the round, from the row's contracted circumference.
+    this.rowRadius = rows.map((r) => {
+      let circ = 0;
+      for (let k = 0; k < r.nodes.length; k++) circ += this.coursePlane(r.nodes[k], r.nodes[(k + 1) % r.nodes.length]);
+      return Math.max(w * 0.8, circ / (2 * Math.PI));
+    });
   }
 
   /** Run `iters` Gauss-Seidel iterations. */
@@ -220,26 +326,66 @@ export class Relaxer {
       const list = this.nbr[i];
       if (!list || list.length < 3) continue;
       if (this.nodes[i].layer) continue;
+      const nrm = this.rsNormal(i);
+      if (!nrm) continue;
+      const [nx, ny, nz] = nrm;
+      // Average of the neighbours' mid-surface positions (their positions minus their offsets).
       let ax = 0, ay = 0, az = 0;
-      for (const j of list) { ax += pos[3 * j]; ay += pos[3 * j + 1]; az += pos[3 * j + 2]; }
+      for (const j of list) {
+        const oj = this.off[j];
+        ax += pos[3 * j] - nx * oj; ay += pos[3 * j + 1] - ny * oj; az += pos[3 * j + 2] - nz * oj;
+      }
       ax /= list.length; ay /= list.length; az /= list.length;
-      // Local normal from the first two neighbour directions that are not parallel.
-      const node = this.nodes[i];
-      const p0 = list[0], p1 = list[1];
-      let ux = pos[3 * p0] - pos[3 * i], uy = pos[3 * p0 + 1] - pos[3 * i + 1], uz = pos[3 * p0 + 2] - pos[3 * i + 2];
-      let vx = pos[3 * p1] - pos[3 * i], vy = pos[3 * p1 + 1] - pos[3 * i + 1], vz = pos[3 * p1 + 2] - pos[3 * i + 2];
-      // Prefer a course direction and a wale direction.
-      const par = node.parents.length ? node.parents[0] : (node.children.length && node.children[0] < this.n ? node.children[0] : null);
-      if (par !== null) { vx = pos[3 * par] - pos[3 * i]; vy = pos[3 * par + 1] - pos[3 * i + 1]; vz = pos[3 * par + 2] - pos[3 * i + 2]; }
-      let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
-      const nl = Math.hypot(nx, ny, nz);
-      if (nl < 1e-6) continue;
-      nx /= nl; ny /= nl; nz /= nl;
-      const dx = ax - pos[3 * i], dy = ay - pos[3 * i + 1], dz = az - pos[3 * i + 2];
+      const oi = this.off[i];
+      const dx = ax + nx * oi - pos[3 * i], dy = ay + ny * oi - pos[3 * i + 1], dz = az + nz * oi - pos[3 * i + 2];
       const d = (dx * nx + dy * ny + dz * nz) * k;
       out[3 * i] += nx * d; out[3 * i + 1] += ny * d; out[3 * i + 2] += nz * d;
     }
     pos.set(out);
+  }
+
+  /** Unit normal at node i pointing toward the right side of the fabric, or null. */
+  rsNormal(i) {
+    const pos = this.pos;
+    const node = this.nodes[i];
+    const row = this.knit.rows[node.row];
+    // A wide stencil (up to three stitches along the course, two rows along the wale)
+    // so the zigzag of a rib or garter fold averages out of the estimate.
+    const back = [], fwd = [], down = [], up = [];
+    for (let k = 1; k <= 3; k++) {
+      if (node.pos - k >= 0) back.push(row.nodes[node.pos - k]);
+      if (node.pos + k < row.nodes.length) fwd.push(row.nodes[node.pos + k]);
+    }
+    let cur = node;
+    for (let k = 0; k < 2 && cur.parents.length; k++) { cur = this.nodes[cur.parents[0]]; down.push(cur.id); }
+    cur = node;
+    for (let k = 0; k < 2 && cur.children.length && cur.children[0] < this.n; k++) { cur = this.nodes[cur.children[0]]; up.push(cur.id); }
+    if ((back.length === 0 && fwd.length === 0) || (down.length === 0 && up.length === 0)) return null;
+    if (back.length === 0) back.push(i);
+    if (fwd.length === 0) fwd.push(i);
+    if (down.length === 0) down.push(i);
+    if (up.length === 0) up.push(i);
+    const rs = row.side === 'rs' || row.isRound;
+    // Positions with the face offsets removed along a normal estimate; two passes, the
+    // first with no estimate, so neighbours' offsets do not tilt the result.
+    let nx = 0, ny = 0, nz = 0;
+    const mean = (list) => {
+      let x = 0, y = 0, z = 0;
+      for (const j of list) { const o = this.off[j]; x += pos[3 * j] - nx * o; y += pos[3 * j + 1] - ny * o; z += pos[3 * j + 2] - nz * o; }
+      return [x / list.length, y / list.length, z / list.length];
+    };
+    for (let pass = 0; pass < 2; pass++) {
+      const a = mean(back), b = mean(fwd), c = mean(down), d = mean(up);
+      const cx = b[0] - a[0], cy = b[1] - a[1], cz = b[2] - a[2];
+      const wx = d[0] - c[0], wy = d[1] - c[1], wz = d[2] - c[2];
+      let x, y, z;
+      if (rs) { x = wy * cz - wz * cy; y = wz * cx - wx * cz; z = wx * cy - wy * cx; }
+      else { x = cy * wz - cz * wy; y = cz * wx - cx * wz; z = cx * wy - cy * wx; }
+      const l = Math.hypot(x, y, z);
+      if (l < 1e-9) return null;
+      nx = x / l; ny = y / l; nz = z / l;
+    }
+    return [nx, ny, nz];
   }
 
   /** Nudge each node toward its row's target radius about the y axis. */
@@ -251,7 +397,7 @@ export class Relaxer {
     cx /= this.n; cz /= this.n;
     for (let i = 0; i < this.n; i++) {
       const node = this.nodes[i];
-      const R = this.rowRadius[node.row];
+      const R = this.rowRadius[node.row] + this.off[i];
       const x = pos[3 * i] - cx, z = pos[3 * i + 2] - cz;
       const r = Math.hypot(x, z) || 1e-6;
       const f = (R - r) / r * k;
@@ -273,7 +419,7 @@ export class Relaxer {
 /** Convenience: relax a knit result fully and return positions. */
 export function relaxKnit(knit, opts) {
   const r = new Relaxer(knit, opts);
-  const iters = opts.iterations || Math.min(400, 80 + Math.round(Math.sqrt(knit.nodes.length) * 4));
+  const iters = opts.iterations || Math.min(500, 100 + Math.round(Math.sqrt(knit.nodes.length) * 5));
   r.relax(iters);
   return r.finish();
 }

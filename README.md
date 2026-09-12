@@ -104,7 +104,10 @@ The page exposes `window.yarnworks` (scene, state, knit results, positions,
   knows which loops it was pulled through.
 - `js/sim/` relaxes that graph with position-based constraints (course,
   wale, shear and bending terms, plus a gentle pressure for tubes) to find
-  the shape of the fabric.
+  the shape of the fabric. Knit and purl faces sit on opposite sides of the
+  fabric's mid-surface; where a face change runs along a line the fabric
+  folds and contracts there, which is what makes rib corrugate and narrow,
+  garter form ridges with compressed rows, and seed stitch stay flat.
 - `js/render/` builds the yarn path, one continuous loop shape per stitch
   in a local frame, and renders it with three.js along with needles,
   markers and lifelines. The yarn itself is not a polygon mesh: each short
