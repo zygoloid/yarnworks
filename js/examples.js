@@ -121,6 +121,63 @@ Repeat rnds 1-2 until there are 20 (24, 28) sts.
 Graft the remaining sts together.`,
   },
   {
+    name: 'Drop-shoulder sweater (3 sizes)',
+    text: `# A drop-shoulder sweater in bulky yarn: the back and front are knit flat and bound off,
+# the sleeves are knit in the round, and the pieces are seamed together at the end.
+# The ribbing is worked on smaller needles than the body.
+Sizes: S (M, L)
+Gauge: 12 sts and 16 rows = 10 cm
+
+Back:
+With smaller needles, cast on 50 (58, 66) sts.
+Row 1: *k1, p1; rep from * to end.
+Repeat row 1 until piece measures 4 cm, ending with a WS row.
+Change to larger needles.
+Continue in stockinette until piece measures 34 (36, 38) cm, ending with a WS row.
+Place a marker at each end of the last row for the armholes.
+Continue in stockinette until piece measures 54 (58, 62) cm, ending with a WS row.
+Bind off.
+
+Front:
+With smaller needles, cast on 50 (58, 66) sts.
+Row 1: *k1, p1; rep from * to end.
+Repeat row 1 until piece measures 4 cm, ending with a WS row.
+Change to larger needles.
+Continue in stockinette until piece measures 34 (36, 38) cm, ending with a WS row.
+Place a marker at each end of the last row for the armholes.
+Continue in stockinette until piece measures 47 (51, 55) cm, ending with a WS row.
+Next row (RS): k19 (22, 25), bind off 12 (14, 16) sts, k to end.
+Work each side separately.
+Row 1 (WS): p.
+Row 2: ssk, k to end.
+Rows 3-6: repeat rows 1-2 twice. 16 (19, 22) sts
+Continue in stockinette until piece measures 54 (58, 62) cm, ending with a WS row.
+Bind off.
+Rejoin yarn to the remaining sts.
+Row 1 (WS): p.
+Row 2: k to last 2 sts, k2tog.
+Rows 3-6: repeat rows 1-2 twice. 16 (19, 22) sts
+Continue in stockinette until piece measures 54 (58, 62) cm, ending with a WS row.
+Bind off.
+
+Sleeves (make 2):
+With smaller needles, cast on 24 (26, 28) sts.
+Join in the round, being careful not to twist.
+Rnd 1: *k1, p1; rep from * to end.
+Repeat rnd 1 until piece measures 5 cm.
+Change to larger needles.
+Rnd 1: k1, m1, k to last st, m1, k1.
+Rnds 2-5: k.
+Repeat rnds 1-5 until there are 40 (44, 48) sts.
+Continue in stockinette until piece measures 44 (46, 48) cm.
+Bind off.
+
+Finishing:
+Sew the shoulder seams.
+Sew the sleeves into the armholes.
+Sew the side seams.`,
+  },
+  {
     name: 'Torus (donut)',
     text: `# A tube whose last round is grafted to its first: a torus.
 Cast on 24 sts.

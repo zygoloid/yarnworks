@@ -41,6 +41,11 @@ npm test
   labels, needle sizes, and lengths. Choose the size for multi-size
   patterns. Yarns can be solid or self-striping, with colours that change by
   length along the yarn; patterns that say `Change to B` get extra yarns.
+  Patterns that name needles (`With smaller needles`, `Change to larger
+  needles`, `4 mm needles`) get a size control per needle; stitches worked
+  on a smaller needle come out smaller than the gauge, which is measured on
+  the main needle. A `Gauge:` line in the pattern sets the gauge and picks
+  the nearest yarn weight.
 - **Markers & lifelines**: add a lifeline at the current row or a stitch
   marker at the current stitch, so the model matches what is on your needles.
 - **View**: drag to rotate, scroll to zoom, right-drag to pan. Needles can
@@ -111,6 +116,23 @@ Checks: a stitch count at the end of a row, such as `(18 sts)` or `— 18 sts`,
 is verified, and the knitter warns if the work twists on itself so that
 the fabric has no consistent right side (a Möbius strip or Klein bottle,
 which a wrongly joined flap or gusset can produce). Lines starting with `#` or `//` are comments.
+
+### Garments in pieces
+
+A pattern can knit several pieces and sew them together, as the sweater
+example does. Name each piece with a heading (`Back:`, `Front:`, `Sleeves
+(make 2):`, which works its instructions once per sleeve) and cast on again
+after binding off; the pieces are laid out side by side. Needles: `With
+smaller needles, cast on 50 sts`, `Change to larger needles`. Armholes:
+`Place a marker at each end of the last row for the armholes`. A neck:
+`Next row (RS): k19, bind off 12 sts, k to end`, then `Work each side
+separately` (the side just worked continues; the other waits), its rows,
+`Bind off`, then `Rejoin yarn to the remaining sts` and the other side's
+rows. Finishing: `Sew the shoulder seams`, `Sew the sleeves into the
+armholes`, `Sew the side seams`. Seams need pieces called Back, Front and
+Sleeve(s); the sewn stitches are pulled together by the relaxation, the
+front and back facing each other and the sleeves set into the armholes the
+way round that keeps the right side out.
 
 ## Development
 

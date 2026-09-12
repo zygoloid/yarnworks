@@ -7,11 +7,16 @@
 // propagation reaches some face with two contradictory orientations.
 
 /**
- * @param {object} knit result of the knitter (nodes, rows)
- * @returns {{ok: boolean, faces: number, conflict: {node: number, row: number}|null}}
+ * @param {object} knit result of the knitter (nodes, rows, and optionally seams:
+ *   [{pairs: [[a, b], ...]}], each an ordered run of sewn-together stitch pairs)
+ * @returns {{ok: boolean, faces: number, conflict: {node: number, row: number}|null,
+ *   flipped: {node: number, row: number}|null}} `flipped` names a stitch whose fabric has
+ *   its right side facing the other way from the rest of its connected piece (a sleeve
+ *   sewn in inside out), which is orientable but not what the knitter meant.
  */
 export function checkOrientable(knit) {
   const { nodes, rows } = knit;
+  const seams = knit.seams || [];
   const n = nodes.length;
   // Neighbour lookup for short paths in the row below: course neighbours and wale links.
   const rowOf = (id) => rows[nodes[id].row];
@@ -55,6 +60,9 @@ export function checkOrientable(knit) {
   };
 
   const faces = [];
+  // Which way a fabric face's canonical cycle runs relative to the right side: a row's
+  // faces run one way for right-side rows and rounds, the other for wrong-side rows.
+  const expect = [];
   for (const row of rows) {
     const ids = row.nodes;
     const pairs = ids.length;
@@ -73,7 +81,19 @@ export function checkOrientable(knit) {
         const cycle = [a, b, y, ...path, x];
         if (new Set(cycle).size !== cycle.length) continue; // degenerate
         faces.push(cycle);
+        expect.push(row.isRound || row.side !== 'ws' ? 1 : -1);
       }
+    }
+  }
+
+  // A seam is a strip of quads between consecutive pairs of sewn stitches.
+  for (const seam of seams) {
+    for (let k = 0; k + 1 < seam.pairs.length; k++) {
+      const [a0, b0] = seam.pairs[k], [a1, b1] = seam.pairs[k + 1];
+      const cycle = [a0, a1, b1, b0];
+      if (new Set(cycle).size !== 4) continue;
+      faces.push(cycle);
+      expect.push(0); // a seam strip has no right side of its own
     }
   }
 
@@ -93,14 +113,20 @@ export function checkOrientable(knit) {
   // Propagate orientations. Edges shared by more than two faces are not manifold
   // (cables, increases) and are skipped rather than trusted.
   const orient = new Int8Array(faces.length);
-  let conflict = null;
+  let conflict = null, flipped = null;
   for (let start = 0; start < faces.length && !conflict; start++) {
     if (orient[start]) continue;
     orient[start] = 1;
+    let ref = 0; // orientation sign times expected sign, for the first fabric face reached
     const queue = [start];
     while (queue.length && !conflict) {
       const fi = queue.shift();
       const f = faces[fi];
+      if (expect[fi]) {
+        const sign = orient[fi] * expect[fi];
+        if (!ref) ref = sign;
+        else if (sign !== ref && !flipped) flipped = { node: f[0], row: nodes[f[0]].row };
+      }
       for (let i = 0; i < f.length; i++) {
         const u = f[i], v = f[(i + 1) % f.length];
         const list = byEdge.get(edgeKey(u, v));
@@ -113,5 +139,5 @@ export function checkOrientable(knit) {
       }
     }
   }
-  return { ok: !conflict, faces: faces.length, conflict };
+  return { ok: !conflict, faces: faces.length, conflict, flipped };
 }

@@ -26,6 +26,7 @@ const state = {
   plies: 4,
   units: 'metric',
   yarns: { A: { kind: 'solid', color: DEFAULT_COLORS.A, stripes: [{ color: '#b5443c', length: 60 }, { color: '#e8d9b5', length: 40 }] } },
+  needles: {}, // sizes chosen for needles the pattern names ('smaller', 'larger', ...), in mm
   stop: null, // null = finished piece; else {row, stitch}
   lifelines: [],
   markers: [],
@@ -60,6 +61,7 @@ function load() {
     if (!state.yarns || !state.yarns.A) state.yarns = { A: { kind: 'solid', color: DEFAULT_COLORS.A, stripes: [] } };
     if (!s.plies) state.plies = weightById(state.weight).plies;
     if (!s.units) state.units = 'metric';
+    if (!state.needles || typeof state.needles !== 'object') state.needles = {};
     if (typeof state.moveMode !== 'boolean') state.moveMode = true;
   } catch (e) { /* ignore */ }
 }
@@ -273,6 +275,56 @@ function renderYarnControls() {
       div.appendChild(list);
     }
     box.appendChild(div);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Needles named by the pattern ("smaller needles", "larger needles", "4 mm needles")
+
+/** Size in mm of the needle the pattern calls `name`: the user's choice, or a sensible default. */
+function needleSizeFor(name) {
+  if (name === null || name === undefined) return state.needle;
+  if (Number.isFinite(state.needles[name])) return state.needles[name];
+  const sizes = NEEDLE_SIZES.map((r) => r[0]);
+  let m;
+  if ((m = /^([\d.]+) mm$/.exec(name))) return parseFloat(m[1]);
+  if ((m = /^US (\S+)$/i.exec(name))) { const row = NEEDLE_SIZES.find((r) => r[1] === m[1]); if (row) return row[0]; }
+  if (name === 'smaller') { const below = sizes.filter((v) => v < state.needle - 0.01); return below.length ? below[below.length - 1] : state.needle; }
+  return state.needle; // 'larger' and anything else: the main needle, which the gauge was measured on
+}
+
+/** How much bigger or smaller stitches worked on needle `name` are than on the main needle. */
+function needleScaleFor(name, yarnRadius) {
+  if (!name) return 1;
+  // A loop wraps the needle and the yarn passing under it, so its length grows with both.
+  const yd = 2 * yarnRadius;
+  return (needleSizeFor(name) + yd) / (state.needle + yd);
+}
+
+function renderNeedleControls() {
+  const box = $('needles');
+  box.innerHTML = '';
+  const names = new Set();
+  if (full) for (const n of full.nodes) if (n.needle) names.add(n.needle);
+  box.hidden = names.size === 0;
+  for (const name of [...names].sort()) {
+    const label = document.createElement('label');
+    const title = /^(smaller|larger)$/.test(name) ? `${name[0].toUpperCase()}${name.slice(1)} needles` : `${name} needles`;
+    label.append(title + ' ');
+    const sel = document.createElement('select');
+    const current = needleSizeFor(name);
+    const sizes = NEEDLE_SIZES.map((r) => r[0]);
+    if (!sizes.some((v) => Math.abs(v - current) < 0.01)) sizes.push(current);
+    sizes.sort((a, b) => a - b);
+    for (const mm of sizes) {
+      const o = document.createElement('option');
+      o.value = String(mm); o.textContent = needleLabel(mm, state.units);
+      sel.appendChild(o);
+    }
+    sel.value = String(current);
+    sel.addEventListener('change', () => { state.needles[name] = parseFloat(sel.value); scheduleUpdate(true); });
+    label.appendChild(sel);
+    box.appendChild(label);
   }
 }
 
@@ -518,7 +570,11 @@ function update(colorsOnly) {
       appliedGauge = key;
       state.sts = gaugeStmt.sts;
       state.rows = gaugeStmt.rows || Math.round(gaugeStmt.sts * 1.4);
-      $('gauge-sts').value = state.sts; $('gauge-rows').value = state.rows;
+      // The yarn weight whose usual gauge is nearest, with its needle and plies.
+      let best = null;
+      for (const w of WEIGHTS) if (best === null || Math.abs(w.sts - state.sts) < Math.abs(best.sts - state.sts)) best = w;
+      if (best && best.id !== state.weight) { state.weight = best.id; state.needle = best.needle; state.plies = best.plies; state.needles = {}; }
+      syncSettingsUI();
     }
   } else {
     appliedGauge = null;
@@ -532,6 +588,7 @@ function update(colorsOnly) {
   messages.sort((a, b) => (a.loc ? a.loc.line : 1e9) - (b.loc ? b.loc.line : 1e9) || (a.severity === 'error' ? -1 : 1));
   showMessages(messages);
   renderYarnControls();
+  renderNeedleControls();
 
   // Clamp the stop point to the rows that exist.
   if (state.stop !== null) {
@@ -566,7 +623,7 @@ function rebuildScene() {
 
   // Warm start from the previous layout so knitting along feels stable, but only if the
   // pattern and settings are unchanged so node ids still mean the same thing.
-  const key = JSON.stringify([state.text, state.sts, state.rows, state.sizeIndex, state.roundMode, state.markers]);
+  const key = JSON.stringify([state.text, state.sts, state.rows, state.sizeIndex, state.roundMode, state.markers, state.needle, state.needles]);
   if (key !== prevKey) { prevPositions = null; prevKey = key; }
   // Positions from a loaded file are shown as they were saved.
   let restored = false;
@@ -579,7 +636,7 @@ function rebuildScene() {
     }
     restoredPositions = null;
   }
-  const relaxer = new Relaxer(view, { stitchWidth: w, rowHeight: h, yarnRadius, prev: prevPositions });
+  const relaxer = new Relaxer(view, { stitchWidth: w, rowHeight: h, yarnRadius, prev: prevPositions, needleScale: (name) => needleScaleFor(name, yarnRadius) });
   const total = restored ? 0 : prevPositions ? Math.min(300, 60 + Math.round(Math.sqrt(view.nodes.length) * 3)) : Math.min(600, 120 + Math.round(Math.sqrt(view.nodes.length) * 6));
   const n = view.nodes.length;
   const quality = n < 3000 ? { subdivisions: 7 } : n < 8000 ? { subdivisions: 5 } : n < 20000 ? { subdivisions: 3 } : { subdivisions: 2 };
@@ -729,6 +786,7 @@ function loadFromFile(text, name) {
   state.lifelines = s.lifelines || [];
   state.markers = s.markers || [];
   if (!state.yarns || !state.yarns.A) state.yarns = { A: { kind: 'solid', color: DEFAULT_COLORS.A, stripes: [] } };
+  if (!state.needles || typeof state.needles !== 'object') state.needles = {};
   state.weight = weightById(state.weight).id; // an unknown weight falls back to a known one
   if (!s.plies) state.plies = weightById(state.weight).plies;
   if (!s.units) state.units = 'metric';

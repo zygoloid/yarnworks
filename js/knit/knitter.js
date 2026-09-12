@@ -50,6 +50,16 @@ export class Knitter {
     this.sideKnown = false;
     this.yarnLength = 0;
     this.yarnName = null;
+    this.needleName = null; // 'smaller', 'larger', '4 mm', ... or null for the main needle
+    // Pieces: each cast-on after a bind-off starts a new one (a sweater's back, front, sleeves).
+    this.pieces = [];
+    this.piece = null;
+    this.rowCount = 0;          // complete rows worked on the current piece (or side of it)
+    this.sectionStartCount = 0; // rowCount when the current section began
+    // One side of a neck worked while the other waits.
+    this.sideHold = null;
+    this.seamRequests = [];
+    this.seams = [];
     this.rowDefs = new Map(); // label -> statement
     this.rowHistory = []; // executed row statements
     this.stopped = false;
@@ -111,6 +121,8 @@ export class Knitter {
       yarnStart: this.yarnLength,
       yarnLength: yarn,
       yarn: this.yarnName,
+      needle: this.needleName,
+      piece: this.piece ? this.piece.index : 0,
       loc: props.loc || null,
     };
     this.yarnLength += yarn;
@@ -189,11 +201,16 @@ export class Knitter {
   }
 
   result() {
+    if (this.piece && this.piece.endRow === null) this.piece.endRow = this.rows.length;
+    if (!this.stopAt && !this.stopped) this.buildSeams();
     if (this.nodes.length > 2 && !this.stopAt) {
-      const topo = checkOrientable({ nodes: this.nodes, rows: this.rows });
+      const topo = checkOrientable({ nodes: this.nodes, rows: this.rows, seams: this.seams });
       if (!topo.ok) {
         const row = this.rows[topo.conflict.row];
         this.message('problem', `${row.label}: the work twists on itself here, so the fabric has no consistent right side (like a Möbius strip or Klein bottle). Check the joins and pick-ups around this point.`, row.loc);
+      } else if (topo.flipped) {
+        const row = this.rows[topo.flipped.row];
+        this.message('problem', `${row.label}: this piece is sewn in with its wrong side out. Check the seams.`, row.loc);
       }
     }
     return {
@@ -206,6 +223,8 @@ export class Knitter {
       reachedStop: this.reachedStop,
       finished: !!this.finished,
       closedLoop: this.closedLoop || null,
+      pieces: this.pieces,
+      seams: this.seams,
       side: this.side,
       stitchWidth: this.stitchWidth,
       rowHeight: this.rowHeight,
@@ -226,6 +245,16 @@ export class Knitter {
         while (j < stmts.length && isRowLike(stmts[j])) j++;
         this.executeRowBlock(stmts.slice(i, j));
         i = j;
+      } else if (s.type === 'section' && s.make > 1) {
+        // "Sleeves (make 2):" — the section's instructions are worked once per piece.
+        let j = i + 1;
+        while (j < stmts.length && stmts[j].type !== 'section') j++;
+        const base = s.make > 1 ? s.name.replace(/s$/i, '') : s.name;
+        for (let k = 1; k <= s.make; k++) {
+          this.executeStatement({ ...s, name: `${base} ${k}`, make: 1 });
+          this.executeStatements(stmts.slice(i + 1, j));
+        }
+        i = j;
       } else {
         this.executeStatement(s);
         i++;
@@ -234,11 +263,16 @@ export class Knitter {
   }
 
   executeStatement(s) {
-    if (!['workFlat', 'yarn', 'section', 'gauge'].includes(s.type)) this.flushIncomplete();
+    if (!['workFlat', 'yarn', 'needle', 'section', 'gauge', 'eachSide'].includes(s.type)) this.flushIncomplete();
     switch (s.type) {
       case 'sizes': return;
       case 'gauge': return;
-      case 'section': this.sectionName = s.name; this.sectionStartRow = this.rows.length; return;
+      case 'section': this.sectionName = s.name; this.sectionStartRow = this.rows.length; this.sectionStartCount = this.rowCount; return;
+      case 'needle': this.needleName = s.name; return;
+      case 'edgeMarkers': return this.doEdgeMarkers(s);
+      case 'eachSide': return this.doEachSide(s);
+      case 'rejoin': return this.doRejoin(s);
+      case 'seam': this.seamRequests.push(s); return;
       case 'workFlat': return this.doWorkFlat(s);
       case 'resumeRound': return this.doResumeRound(s);
       case 'graft': return this.doGraft(s);
@@ -254,7 +288,7 @@ export class Knitter {
 
   doCastOn(s) {
     const n = this.num(s.count, s.loc);
-    if (this.castOn && this.nodes.length > 0 && (this.left.length || this.right.length)) {
+    if (this.castOn && !this.finished && this.nodes.length > 0 && (this.loopsOn(this.left) || this.loopsOn(this.right))) {
       // Casting on more stitches at the start of a row (e.g. for a sleeve): add to the right needle.
       this.beginRow({ label: 'Cast on', loc: s.loc, isRound: this.inRound, castOn: true });
       for (let i = 0; i < n; i++) this.put(this.newNode({ kind: 'co', loc: s.loc }));
@@ -262,13 +296,79 @@ export class Knitter {
       this.finishRow(false);
       return;
     }
-    this.castOn = true;
-    this.side = 'ws';
+    this.startPiece(s);
     const row = this.startRow('Cast on', s.loc, false, true);
     row.castOn = true;
     for (let i = 0; i < n; i++) this.put(this.newNode({ kind: 'co', loc: s.loc }));
     this.finishRow(false);
     if (this.inRoundOverride === true) { this.inRound = true; this.joined = true; this.side = 'rs'; }
+  }
+
+  /** Begin a new piece: the needles are emptied and the work starts flat from a cast on. */
+  startPiece(s) {
+    if (this.currentRow) this.finishRow(false);
+    if (this.piece) this.piece.endRow = this.rows.length;
+    const name = this.sectionName || (this.pieces.length ? `Piece ${this.pieces.length + 1}` : null);
+    this.piece = { index: this.pieces.length, name, role: pieceRole(name), startRow: this.rows.length, startNode: this.nodes.length, endRow: null, inRound: false, edgeMarkers: [], needle: this.needleName };
+    this.pieces.push(this.piece);
+    this.castOn = true;
+    this.finished = false;
+    this.left = []; this.right = [];
+    this.inRound = false; this.joined = false;
+    this.side = 'ws';
+    this.flat = null; this.lastFlat = null; this.sideHold = null;
+    this.pendingIncomplete = null; this.wrapPending = false; this.turnedMidRow = false;
+    this.rowCount = 0; this.sectionStartCount = 0; this.sectionStartRow = this.rows.length;
+    if (this.inRoundOverride === true) { this.inRound = true; this.joined = true; this.side = 'rs'; }
+  }
+
+  /** "Place a marker at each end of the last row": remembered on the piece (for the armholes). */
+  doEdgeMarkers(s) {
+    if (this.currentRow) this.finishRow(false);
+    if (!this.piece) throw new KnitError('Place markers after some rows have been worked', s.loc);
+    let last = this.rows.length - 1;
+    while (last >= 0 && (this.rows[last].castOn || !this.rows[last].complete)) last--;
+    if (last < this.piece.startRow) throw new KnitError('Place markers after some rows have been worked', s.loc);
+    this.piece.edgeMarkers.push({ row: last, name: s.name });
+  }
+
+  /**
+   * "Work each side separately" after a row that bound off the centre stitches: the side
+   * just worked (next on the needle after turning) is worked on; the other side waits.
+   */
+  doEachSide(s) {
+    if (this.currentRow) this.finishRow(false);
+    this.pendingIncomplete = null;
+    if (this.sideHold) throw new KnitError('Already working one side separately; rejoin the yarn to the other side first', s.loc);
+    if (this.inRound) throw new KnitError('"Work each side separately" needs flat work with the centre stitches bound off', s.loc);
+    this.turn();
+    this.turnedMidRow = true;
+    // The bound-off gap leaves one loop on the needle (the last stitch of the bind off):
+    // the side worked last ends there.
+    let idx = -1;
+    for (let i = 0; i < this.left.length; i++) { const e = this.left[i]; if (typeof e === 'number' && this.nodes[e].op === 'bo' && this.nodes[e].passedOver === null) { idx = i; break; } }
+    if (idx < 0 || idx === this.left.length - 1) throw new KnitError('"Work each side separately" needs a row that bound off the centre stitches first (e.g. "k19, bind off 12 sts, k to end")', s.loc);
+    const held = this.left.slice(idx + 1).filter((e) => typeof e === 'number');
+    this.left = this.left.slice(0, idx + 1);
+    this.sideHold = { held, side: this.side, rowCount: this.rowCount, loc: s.loc };
+  }
+
+  /** "Rejoin yarn to the remaining sts": work the side that waited. */
+  doRejoin(s) {
+    if (this.currentRow) this.finishRow(false);
+    if (!this.sideHold) throw new KnitError('"Rejoin yarn" but no stitches are waiting: use "Work each side separately" after binding off the centre stitches', s.loc);
+    if (!this.finished && this.remaining() > 0) throw new KnitError('"Rejoin yarn" but the first side has not been bound off yet', s.loc);
+    const hold = this.sideHold;
+    this.sideHold = null;
+    this.left = hold.held.slice();
+    this.right = [];
+    this.side = hold.side;
+    this.turnedMidRow = true;
+    this.finished = false;
+    this.rowCount = hold.rowCount;
+    if (s.side && s.side !== hold.side) {
+      this.message('warning', `Rejoining with the ${s.side.toUpperCase()} facing, but the next row on these stitches is a ${hold.side.toUpperCase()} row; working it as a ${hold.side.toUpperCase()} row`, s.loc);
+    }
   }
 
   doJoin(s) {
@@ -280,6 +380,7 @@ export class Knitter {
     this.inRound = true;
     this.joined = true;
     this.side = 'rs';
+    if (this.piece) this.piece.inRound = true;
   }
 
   // -- Rows -------------------------------------------------------------------
@@ -303,6 +404,7 @@ export class Knitter {
       stitchesAfter: 0,
       markersBefore: this.markerPositions(this.left),
       section: this.sectionName,
+      piece: this.piece ? this.piece.index : 0,
     };
     this.rows.push(row);
     this.currentRow = row;
@@ -351,7 +453,7 @@ export class Knitter {
     row.stitchesAfter = this.loopsOn(this.right) + this.loopsOn(this.left);
     row.markersAfter = this.markerPositions(this.right.concat(this.left));
     this.currentRow = null;
-    if (!aborted && !row.castOn) this.rowHistory.push(row.stmt || null);
+    if (!aborted && !row.castOn) { this.rowHistory.push(row.stmt || null); this.rowCount++; }
   }
 
   /** Execute a block of consecutive row statements, honouring row labels. */
@@ -562,7 +664,7 @@ export class Knitter {
     if (t.kind === 'measure') {
       const targetMm = t.unit === 'cm' ? this.num(t.length, s.loc) * 10 : t.unit === 'in' ? this.num(t.length, s.loc) * 25.4 : this.num(t.length, s.loc);
       let guard = 0;
-      const from = t.from ? this.sectionStartRow : 0;
+      const from = t.from ? this.sectionStartCount : 0;
       while (this.heightMm(from) < targetMm - 1e-6) {
         runOnce();
         if (++guard > 5000) throw new KnitError('Too many rows (is the gauge sensible?)', s.loc);
@@ -585,6 +687,19 @@ export class Knitter {
         last = now;
         if (++guard > 5000) throw new KnitError('Too many rows', s.loc);
       }
+      return;
+    }
+    if (t.kind === 'rowsRel') {
+      // A number of rows from here, one row at a time through the pattern's rows.
+      const target = this.num(t.count, s.loc), base = this.rowCount;
+      let i = 0, guard = 0;
+      while (this.rowCount - base < target) {
+        const st = stmts[i++ % stmts.length];
+        if (st.type === 'repeatRows') this.doRepeatRows(st, st);
+        else this.executeRowStatement(st, st.labels && st.labels.list ? st.labels.list[0] : undefined, true);
+        if (++guard > 5000) throw new KnitError('Too many rows', s.loc);
+      }
+      if (t.endingWith) this.workUntilSide(t.endingWith, stmts, s.loc);
       return;
     }
     if (t.kind === 'rows') {
@@ -617,8 +732,9 @@ export class Knitter {
     return null;
   }
 
-  heightMm(fromRow = 0) { return this.rowsWorked(fromRow) * this.rowHeight; }
-  rowsWorked(fromRow = 0) { let n = 0; for (let i = fromRow; i < this.rows.length; i++) if (!this.rows[i].castOn && this.rows[i].complete) n++; return n; }
+  heightMm(fromCount = 0) { return this.rowsWorked(fromCount) * this.rowHeight; }
+  /** Rows worked on the current piece (or the side of it in hand) since `fromCount` rows had been. */
+  rowsWorked(fromCount = 0) { return this.rowCount - fromCount; }
   stitchCount() { return this.loopsOn(this.left) + this.loopsOn(this.right); }
 
   doPlainRows(s) {
@@ -650,7 +766,9 @@ export class Knitter {
     }
     // For stockinette starting on the wrong side, begin with whichever row keeps the RS knit.
     if (!inRound && (s.stitch === 'stockinette' || s.stitch === 'reverse stockinette') && this.upcomingSide() === 'ws') rowsFor.reverse();
-    const fake = { ref: { list: [] }, times: s.count, loc: s.loc };
+    // "for 10 rows" counts rows, not repeats of the (two-row) pattern.
+    const times = s.count && s.count.kind === 'count' ? { ...s.count, kind: 'rowsRel' } : s.count;
+    const fake = { ref: { list: [] }, times, loc: s.loc };
     const saved = this.resolveRowRef;
     this.resolveRowRef = () => rowsFor;
     try { this.doRepeatRows(fake, null); } finally { this.resolveRowRef = saved; }
@@ -1175,9 +1293,12 @@ export class Knitter {
       this.put(node);
       return node;
     };
-    if (count === 'all') count = Math.max(0, this.remaining() - (this.lastWorked() === null ? 1 : 0));
+    if (count === 'all') count = Math.max(0, this.remaining() - 1);
     if (count === 0) return;
-    if (this.lastWorked() === null) {
+    // The first stitch bound off is always a newly worked one: at the start of a row there
+    // is nothing else, and mid-row ("k19, bind off 12 sts, k to end") the stitches already
+    // worked are left alone, so the bind off takes count + 1 stitches and leaves one loop.
+    if (this.lastWorked() === null || !whole) {
       if (this.remaining() < 2 && count > 0) {
         if (this.remaining() === 1 && whole) { const n = workOne(); n.finished = true; return; }
         throw this.err(`"bind off" needs at least 2 stitches`, loc);
@@ -1214,6 +1335,117 @@ export class Knitter {
 }
 
 function rowWord(s) { return s.isRound ? 'Round' : 'Row'; }
+
+/** What a piece is for, from its section name: 'back', 'front', 'sleeve' or null. */
+function pieceRole(name) {
+  if (!name) return null;
+  const n = name.toLowerCase();
+  if (/sleeve/.test(n)) return 'sleeve';
+  if (/back/.test(n)) return 'back';
+  if (/front/.test(n)) return 'front';
+  return null;
+}
+
+Knitter.prototype.buildSeams = function buildSeams() {
+  if (this.seamRequests.length === 0) return;
+  const col = this.columns();
+  const rows = this.rows, nodes = this.nodes;
+  const geo = new Map();
+  const geometry = (piece) => {
+    if (geo.has(piece.index)) return geo.get(piece.index);
+    const pieceRows = [];
+    for (let r = piece.startRow; r < piece.endRow; r++) if (rows[r].complete && !rows[r].castOn && rows[r].nodes.length) pieceRows.push(rows[r]);
+    let min = Infinity, max = -Infinity;
+    for (const row of pieceRows) for (const id of row.nodes) { min = Math.min(min, col[id]); max = Math.max(max, col[id]); }
+    const mid = (min + max) / 2;
+    // Selvedge stitches on the piece's own outer edges, row by row (a row worked on one
+    // side of a neck only has one).
+    const left = [], right = [];
+    for (const row of pieceRows) {
+      if (row.isRound) continue;
+      let lo = row.nodes[0], hi = row.nodes[0];
+      for (const id of row.nodes) { if (col[id] < col[lo]) lo = id; if (col[id] > col[hi]) hi = id; }
+      if (col[lo] < mid) left.push({ id: lo, row: row.index });
+      if (col[hi] > mid) right.push({ id: hi, row: row.index });
+    }
+    // Stitches bound off in whole bind-off rows (the shoulders, a sleeve top), in order.
+    const boundOff = [];
+    for (const row of pieceRows) if (row.bindOff) for (const id of row.nodes) if (nodes[id].op === 'bo') boundOff.push(id);
+    const marker = piece.edgeMarkers.length ? piece.edgeMarkers[piece.edgeMarkers.length - 1].row : null;
+    const g = { piece, rows: pieceRows, min, max, mid, left, right, boundOff, marker };
+    geo.set(piece.index, g);
+    return g;
+  };
+  const byRole = (role) => this.pieces.filter((p) => p.role === role);
+  const need = (role, s, what) => {
+    const list = byRole(role);
+    if (list.length === 0) throw new KnitError(`${what}: there is no piece called "${role}" (name the sections "Back:", "Front:" and "Sleeves (make 2):")`, s.loc);
+    return list;
+  };
+  const addSeam = (kind, pairs) => { pairs = pairs.filter(([a, b]) => a !== b && a !== undefined && b !== undefined); if (pairs.length) this.seams.push({ kind, pairs }); };
+  // Pick `count` evenly spaced entries from a list.
+  const sample = (list, i, count) => list[Math.min(list.length - 1, Math.floor((i + 0.5) * list.length / count))];
+
+  for (const s of this.seamRequests) {
+    try {
+      if (s.what === 'shoulders') {
+        const front = geometry(need('front', s, 'Sew the shoulder seams')[0]);
+        const back = geometry(need('back', s, 'Sew the shoulder seams')[0]);
+        if (!front.boundOff.length || !back.boundOff.length) throw new KnitError('Sew the shoulder seams: the front and back must be bound off first', s.loc);
+        // Each front shoulder stitch meets the back stitch in the mirrored column (the back is
+        // turned to face the other way), leaving the back neck open where the front neck is.
+        const pairs = [];
+        for (const a of front.boundOff) {
+          const want = back.max - (col[a] - front.min);
+          let best = null;
+          for (const b of back.boundOff) if (best === null || Math.abs(col[b] - want) < Math.abs(col[best] - want)) best = b;
+          if (best !== null && Math.abs(col[best] - want) <= 1) pairs.push([a, best]);
+        }
+        addSeam('shoulder', pairs);
+      } else if (s.what === 'sides') {
+        const front = geometry(need('front', s, 'Sew the side seams')[0]);
+        const back = geometry(need('back', s, 'Sew the side seams')[0]);
+        const below = (edge, g) => edge.filter((e) => g.marker === null || e.row <= g.marker);
+        for (const [fe, be] of [[front.left, back.right], [front.right, back.left]]) {
+          const f = below(fe, front), b = below(be, back);
+          if (!f.length || !b.length) continue;
+          const n = Math.max(f.length, b.length);
+          const pairs = [];
+          for (let i = 0; i < n; i++) pairs.push([sample(f, i, n).id, sample(b, i, n).id]);
+          addSeam('side', pairs);
+        }
+      } else if (s.what === 'sleeves') {
+        const front = geometry(need('front', s, 'Sew the sleeves into the armholes')[0]);
+        const back = geometry(need('back', s, 'Sew the sleeves into the armholes')[0]);
+        const sleeves = need('sleeve', s, 'Sew the sleeves into the armholes');
+        if (front.marker === null || back.marker === null) throw new KnitError('Sew the sleeves into the armholes: mark the armholes first ("Place a marker at each end of the last row")', s.loc);
+        const above = (edge, g) => edge.filter((e) => e.row >= g.marker);
+        const armholes = [
+          above(front.left, front).map((e) => e.id).concat(above(back.right, back).map((e) => e.id).reverse()),
+          above(front.right, front).map((e) => e.id).concat(above(back.left, back).map((e) => e.id).reverse()),
+        ];
+        sleeves.slice(0, 2).forEach((sleeve, k) => {
+          const g = geometry(sleeve);
+          const ring = g.boundOff;
+          if (!ring.length) throw new KnitError('Sew the sleeves into the armholes: the sleeves must be bound off first', s.loc);
+          const path = armholes[k];
+          if (path.length < 2) throw new KnitError('Sew the sleeves into the armholes: the armhole edges are missing', s.loc);
+          // The sleeve top runs round from the underarm; the armhole runs up one panel and
+          // down the other. Whichever way round keeps the sleeve's right side out is used.
+          const forward = [], backward = [];
+          for (let i = 0; i < ring.length; i++) {
+            forward.push([ring[i], sample(path, i, ring.length)]);
+            backward.push([ring[i], sample(path, ring.length - 1 - i, ring.length)]);
+          }
+          const trial = (pairs) => { const t = checkOrientable({ nodes: this.nodes, rows: this.rows, seams: this.seams.concat([{ kind: 'sleeve', pairs }]) }); return t.ok && !t.flipped; };
+          addSeam('sleeve', trial(forward) || !trial(backward) ? forward : backward);
+        });
+      }
+    } catch (e) {
+      if (e instanceof PatternError) this.message('error', e.message, e.loc); else throw e;
+    }
+  }
+};
 
 /**
  * Convenience: run a pattern and return the result.

@@ -92,6 +92,7 @@ label.inline select { margin-left: 2px; }
 .readout .next { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #f1f0ec; padding: 1px 5px; border-radius: 3px; font-weight: 500; }
 
 .yarns { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.needles { margin-top: 10px; }
 .yarn { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 4px; }
 .yarn .head { display: flex; align-items: center; gap: 10px; }
 .yarn .name { font-weight: 600; min-width: 60px; }

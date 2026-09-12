@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parsePattern } from '../js/pattern/parser.js';
 import { knit } from '../js/knit/knitter.js';
+import { checkOrientable } from '../js/knit/topology.js';
 
 function run(text, opts = {}) {
   const p = parsePattern(text);
@@ -295,4 +296,88 @@ Graft the remaining sts together.`, { rowHeight: 4 });
   const grafts = r.nodes.filter((n) => n.graft);
   assert.equal(grafts.length, 6);
   assert.ok(grafts.every((n) => n.parents.length === 2));
+});
+
+test('sweater construction: pieces, needles, neck worked each side separately, seams', () => {
+  const r = run(`Sizes: S (M)
+Back:
+With smaller needles, cast on 20 (24) sts.
+Row 1: *k1, p1; rep from * to end.
+Rows 2-3: repeat row 1.
+Change to larger needles.
+Work in stockinette for 10 rows.
+Place a marker at each end of the last row for the armholes.
+Work in stockinette for 8 rows.
+Bind off.
+Front:
+With smaller needles, cast on 20 (24) sts.
+Row 1: *k1, p1; rep from * to end.
+Rows 2-3: repeat row 1.
+Change to larger needles.
+Work in stockinette for 10 rows.
+Place a marker at each end of the last row for the armholes.
+Work in stockinette for 4 rows.
+Next row (RS): k7 (9), bind off 6 sts, k to end.
+Work each side separately.
+Row 1 (WS): p.
+Row 2: ssk, k to end. 6 (8) sts
+Row 3: p.
+Bind off.
+Rejoin yarn to the remaining sts.
+Row 1 (WS): p.
+Row 2: k to last 2 sts, k2tog. 6 (8) sts
+Row 3: p.
+Bind off.
+Sleeves (make 2):
+With smaller needles, cast on 12 sts.
+Join in the round.
+Rnds 1-2: *k1, p1; rep from * to end.
+Change to larger needles.
+Rnd 3: k1, m1, k to last st, m1, k1.
+Rnds 4-5: k.
+Repeat rnds 3-5 until there are 18 sts.
+Knit 2 rounds.
+Bind off.
+Finishing:
+Sew the shoulder seams.
+Sew the sleeves into the armholes.
+Sew the side seams.`, { rowHeight: 4 });
+  assert.deepEqual(errors(r), []);
+  assert.equal(r.finished, true);
+  assert.deepEqual(r.pieces.map((p) => [p.name, p.role, p.inRound]), [['Back', 'back', false], ['Front', 'front', false], ['Sleeve 1', 'sleeve', true], ['Sleeve 2', 'sleeve', true]]);
+  // Every stitch knows its piece and needle.
+  assert.equal(r.nodes[r.pieces[1].startNode].piece, 1);
+  assert.equal(r.nodes[r.pieces[0].startNode].needle, 'smaller');
+  assert.equal(r.nodes[r.pieces[0].startNode + 20 * 4].needle, 'larger');
+  // The neck row leaves 7 sts on each side with 6 bound off between them.
+  const neck = r.rows.find((x) => x.piece === 1 && x.stitchesBefore === 20 && x.stitchesAfter === 14);
+  assert.ok(neck, 'the neck row binds off 6 of 20 sts');
+  const sides = r.rows.filter((x) => x.piece === 1 && x.index > neck.index && !x.bindOff);
+  assert.ok(sides.every((x) => x.stitchesBefore <= 7), sides.map((x) => x.stitchesBefore).join(','));
+  // Seams: 12 shoulder pairs (6 each side), 18 pairs per sleeve, side seams up to the markers.
+  const kinds = {};
+  for (const s of r.seams) (kinds[s.kind] = kinds[s.kind] || []).push(s.pairs.length);
+  assert.deepEqual(kinds, { shoulder: [12], sleeve: [18, 18], side: [13, 13] });
+  // The sewn garment has a consistent right side, and the sleeves would not if set in the other way round.
+  const topo = checkOrientable(r);
+  assert.equal(topo.ok, true);
+  assert.equal(topo.flipped, null);
+  const flipped = r.seams.map((s) => s.kind === 'sleeve' ? { ...s, pairs: s.pairs.map(([a], i) => [a, s.pairs[s.pairs.length - 1 - i][1]]) } : s);
+  const bad = checkOrientable({ nodes: r.nodes, rows: r.rows, seams: flipped });
+  assert.equal(bad.ok, true);
+  assert.ok(bad.flipped && r.pieces[bad.flipped.node >= r.pieces[2].startNode ? 2 : 0].role, 'the sleeve is inside out');
+  assert.ok(bad.flipped.node >= r.pieces[2].startNode, 'the flipped fabric is a sleeve');
+});
+
+test('a mid-row bind off takes one extra stitch and leaves its last loop with the second side', () => {
+  const r = run(`Cast on 20 sts.
+Row 1: k7, bind off 6 sts, k to end.`);
+  assert.deepEqual(errors(r), []);
+  const row = r.rows[1];
+  assert.equal(row.stitchesAfter, 14);
+  // Seven plain knit stitches, then seven bound-off loops (six passed over, one left), then six knit.
+  const ops = row.nodes.map((id) => r.nodes[id].op);
+  assert.deepEqual(ops.slice(0, 7), Array(7).fill('k'));
+  assert.deepEqual(ops.slice(7, 14), Array(7).fill('bo'));
+  assert.equal(ops.length, 20);
 });

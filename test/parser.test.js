@@ -189,3 +189,19 @@ test('cable notation', () => {
   const r = parsePattern('Row 1: c3f');
   assert.match(r.errors[0].message, /even number/);
 });
+
+test('garment statements: needles, make-N headings, edge markers, each side, rejoin, seams', () => {
+  const p = parsePattern(`Sleeves (make 2):
+With smaller needles and CC, cast on 40 sts.
+Change to 4 mm needles.
+Using US 8 needles, knit 2 rows.
+Place a marker at each end of the last row for the armholes.
+Work each side separately.
+With WS facing, rejoin yarn to the remaining sts.
+Sew the shoulder seams.
+Set in the sleeves.
+Sew the side and sleeve seams.`);
+  assert.deepEqual(p.errors, []);
+  const types = p.statements.map((s) => s.type + (s.name ? ':' + s.name : '') + (s.make > 1 ? ' x' + s.make : '') + (s.what ? ':' + s.what : '') + (s.side ? ':' + s.side : ''));
+  assert.deepEqual(types, ['section:Sleeves x2', 'needle:smaller', 'yarn:CC', 'castOn', 'needle:4 mm', 'needle:US 8', 'plainRows', 'edgeMarkers:armhole', 'eachSide', 'rejoin:ws', 'seam:shoulders', 'seam:sleeves', 'seam:sides']);
+});

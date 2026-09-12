@@ -132,8 +132,8 @@ export class YarnPathBuilder {
       const front = scale(N, s * d);
       const row = this.rows[node.row];
 
-      // Strand breaks: a change of yarn starts a new strand.
-      if (prevNode && prevNode.yarn !== node.yarn) {
+      // Strand breaks: a change of yarn, or a new piece, starts a new strand.
+      if (prevNode && (prevNode.yarn !== node.yarn || prevNode.piece !== node.piece)) {
         strands.push({ start: strandStart, end: pts.length / 3 });
         strandStart = pts.length / 3;
         prevNode = null;

@@ -5,7 +5,7 @@ export const FORMAT = 'yarnworks';
 export const VERSION = 1;
 
 /** Settings that go in the file, in this order; anything else in the app state is transient. */
-const STATE_KEYS = ['text', 'weight', 'needle', 'sts', 'rows', 'sizeIndex', 'roundMode', 'tension', 'plies', 'units', 'yarns', 'stop', 'lifelines', 'markers', 'showNeedles'];
+const STATE_KEYS = ['text', 'weight', 'needle', 'sts', 'rows', 'sizeIndex', 'roundMode', 'tension', 'plies', 'units', 'yarns', 'needles', 'stop', 'lifelines', 'markers', 'showNeedles'];
 
 /**
  * Build the document to save.

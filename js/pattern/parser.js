@@ -198,6 +198,15 @@ export class Parser {
       const r = this.tryResumeRound(cur);
       if (r) return r;
     }
+    if (w === 'rejoin' || w === 'return' || (w === 'with' && cur.isWord(['rs', 'ws'], 1) && cur.isWord('facing', 2))) return this.parseRejoin(cur, null);
+    if ((w === 'work' || w === 'working') && this.lineHasWords(cur, ['each', 'side']) && this.lineHasWords(cur, ['separately'])) {
+      while (!cur.atEnd()) cur.next();
+      return { type: 'eachSide', loc: cur.loc(first) };
+    }
+    if ((w === 'place' || w === 'pm' || w === 'mark' || w === 'put') && this.lineHasWords(cur, ['each']) && (this.lineHasWords(cur, ['end']) || this.lineHasWords(cur, ['side']))) {
+      return this.parseEdgeMarkers(cur);
+    }
+    if (w === 'sew' || w === 'seam' || w === 'stitch' || w === 'attach' || w === 'set' || w === 'insert' || (w === 'join' && !this.lineHasWords(cur, ['round', 'rnd']))) return this.parseSeam(cur);
     if (w === 'cast' && cur.isWord('on', 1)) return this.parseCastOn(cur);
     if (w === 'co' && (cur.isNum(1) || cur.isWord(['all'], 1))) return this.parseCastOn(cur);
     if ((w === 'bind' || w === 'cast') && cur.isWord('off', 1)) { cur.next(); cur.next(); return this.parseBindOffStatement(cur); }
@@ -222,7 +231,7 @@ export class Parser {
       cur.next();
       return this.parsePlainRows(cur, first);
     }
-    if (w === 'change' || w === 'with' || w === 'using' || w === 'switch') return this.parseColorChange(cur);
+    if (w === 'change' || w === 'with' || w === 'using' || w === 'switch') return this.parseChange(cur);
     // Anything else: unrecognised.
     throw new PatternError(`I don't understand this line (it should start with "Row", "Round", "Cast on", "Bind off", "Repeat", etc.)`, cur.loc(first, cur.toks[cur.toks.length - 1]));
   }
@@ -276,21 +285,96 @@ export class Parser {
     return { type: 'join', loc: cur.loc(first) };
   }
 
-  parseColorChange(cur) {
+  /** True if any of `words` appears later on this line. */
+  lineHasWords(cur, words) {
+    for (let j = 0; cur.peek(j).type !== 'eol'; j++) if (cur.isWord(words, j)) return true;
+    return false;
+  }
+
+  /**
+   * A change of yarn and/or needles: "Change to B", "With CC, cast on 57 sts", "Change to
+   * larger needles", "With smaller needles and MC, cast on 48 sts", "Using 4 mm needles".
+   */
+  parseChange(cur) {
     const first = cur.next();
     cur.acceptWord('to');
-    cur.acceptWord(['color', 'colour', 'yarn']);
-    const t = cur.next();
-    if (t.type !== 'word') throw cur.error('Expected a yarn name (e.g. "A" or "MC")', t);
-    const yarn = { type: 'yarn', name: t.text.toUpperCase(), loc: cur.loc(first) };
-    cur.acceptWord(['yarn', 'color', 'colour']);
+    const out = [];
+    for (;;) {
+      cur.acceptWord(['the', 'a']);
+      const needle = this.tryNeedle(cur);
+      if (needle) {
+        out.push({ type: 'needle', name: needle, loc: cur.loc(first) });
+      } else {
+        cur.acceptWord(['color', 'colour', 'yarn']);
+        const t = cur.next();
+        if (t.type !== 'word') throw cur.error('Expected a yarn name (e.g. "A" or "MC") or needles (e.g. "larger needles")', t);
+        out.push({ type: 'yarn', name: t.text.toUpperCase(), loc: cur.loc(first) });
+        cur.acceptWord(['yarn', 'color', 'colour']);
+      }
+      if (!cur.acceptWord('and')) break;
+    }
     // "With CC, cast on 57 sts": the rest of the line is a statement of its own.
     if (cur.acceptPunct(',') && !cur.atEnd() && cur.peek().type === 'word') {
       const rest = this.parseStatement(cur);
-      return [yarn, ...(Array.isArray(rest) ? rest : [rest])];
+      out.push(...(Array.isArray(rest) ? rest : [rest]));
     }
     while (!cur.atEnd()) cur.next();
-    return yarn;
+    return out.length === 1 ? out[0] : out;
+  }
+
+  /** "smaller needles", "larger needle", "4 mm needles", "US 8 needles": the needle's name, or null. */
+  tryNeedle(cur) {
+    const save = cur.i;
+    let name = null;
+    if (cur.isWord(['smaller', 'larger', 'small', 'large', 'bigger', 'smallest', 'largest', 'big'])) {
+      const w = cur.next().value;
+      name = { small: 'smaller', smallest: 'smaller', large: 'larger', bigger: 'larger', largest: 'larger', big: 'larger' }[w] || w;
+    } else if (cur.isNum() && cur.isWord('mm', 1)) {
+      name = `${cur.next().value} mm`; cur.next();
+    } else if (cur.isWord('us') && cur.isNum(1)) {
+      cur.next(); name = `US ${cur.next().value}`;
+    }
+    if (name === null) return null;
+    cur.acceptWord(['size', 'sized']);
+    if (!cur.acceptWord(['needles', 'needle', 'ndls', 'dpns', 'dpn'])) { cur.i = save; return null; }
+    return name;
+  }
+
+  /** "Rejoin yarn to the remaining sts", "With RS facing, rejoin yarn at the neck edge", "Return to the held sts". */
+  parseRejoin(cur, side) {
+    const first = cur.peek();
+    if (cur.isWord('with') && cur.isWord(['rs', 'ws'], 1)) { cur.next(); side = cur.next().value; cur.acceptWord('facing'); cur.acceptPunct(','); }
+    while (!cur.atEnd()) {
+      const t = cur.next();
+      if (t.type === 'word' && (t.value === 'rs' || t.value === 'ws') && cur.isWord('facing')) side = t.value;
+    }
+    return { type: 'rejoin', side, loc: cur.loc(first) };
+  }
+
+  /** "Place a marker at each end of the last row for the armholes". */
+  parseEdgeMarkers(cur) {
+    const first = cur.peek();
+    let name = null;
+    while (!cur.atEnd()) {
+      const t = cur.next();
+      if (t.type === 'word' && ['armhole', 'armholes', 'underarm', 'underarms', 'sleeve', 'sleeves'].includes(t.value)) name = 'armhole';
+    }
+    return { type: 'edgeMarkers', name, loc: cur.loc(first) };
+  }
+
+  /** "Sew the shoulder seams", "Sew the sleeves into the armholes", "Sew the side and sleeve seams", "Join the shoulders". */
+  parseSeam(cur) {
+    const first = cur.peek();
+    const words = [];
+    while (!cur.atEnd()) { const t = cur.next(); if (t.type === 'word') words.push(t.value); }
+    const has = (...ws) => ws.some((w) => words.includes(w));
+    let what = null;
+    if (has('shoulder', 'shoulders')) what = 'shoulders';
+    else if (has('sleeve', 'sleeves') && has('armhole', 'armholes', 'set', 'into', 'in', 'attach', 'insert', 'body', 'sew')) what = 'sleeves';
+    else if (has('side', 'sides', 'underarm', 'underarms')) what = 'sides';
+    if (what === 'sleeves' && has('side', 'sides') && !has('into', 'armhole', 'armholes')) what = 'sides';
+    if (what === null) throw new PatternError('I can sew "the shoulder seams", "the sleeves into the armholes" and "the side seams"; this seam is not one I know', cur.loc(first, cur.toks[cur.toks.length - 1]));
+    return { type: 'seam', what, loc: cur.loc(first) };
   }
 
   /** "Gauge: 40 sts and 56 rows = 10 cm" (rows optional; the unit is assumed to be 10 cm / 4 in). */
@@ -314,15 +398,26 @@ export class Parser {
   looksLikeHeading(cur) {
     let j = 0;
     while (cur.peek(j).type === 'word' && j < 4) j++;
-    return j >= 1 && j <= 4 && cur.isPunct(':', j) && cur.peek(j + 1).type === 'eol' && !ROW_WORDS.has(cur.peek(0).value) && cur.peek(0).value !== 'next';
+    if (j < 1 || j > 4 || ROW_WORDS.has(cur.peek(0).value) || cur.peek(0).value === 'next') return false;
+    // "Sleeves (make 2):"
+    if (cur.isPunct('(', j) && cur.isWord('make', j + 1)) { while (cur.peek(j).type !== 'eol' && !cur.isPunct(')', j)) j++; j++; }
+    return cur.isPunct(':', j) && cur.peek(j + 1).type === 'eol';
   }
 
   parseHeading(cur) {
     const first = cur.peek();
     const words = [];
     while (cur.peek().type === 'word') words.push(cur.next().text);
+    let make = 1;
+    if (cur.acceptPunct('(')) {
+      cur.acceptWord('make');
+      if (cur.isNum()) make = cur.next().value;
+      else if (NUMBER_WORDS[cur.peek().value] !== undefined) make = NUMBER_WORDS[cur.next().value];
+      else throw cur.error('Expected a number after "make" (e.g. "Sleeves (make 2):")');
+      while (!cur.atEnd() && !cur.acceptPunct(')')) cur.next();
+    }
     cur.acceptPunct(':');
-    return { type: 'section', name: words.join(' '), loc: cur.loc(first) };
+    return { type: 'section', name: words.join(' '), make, loc: cur.loc(first) };
   }
 
   /** "Graft the remaining sts together", "Kitchener stitch the toe closed", "Close the toe with kitchener stitch". */

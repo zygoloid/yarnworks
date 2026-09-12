@@ -23,6 +23,11 @@ export class Relaxer {
     this.pos = new Float32Array(this.n * 3);
     this.inRound = knit.inRound;
     this.anyRound = knit.rows.some((r) => r.isRound);
+    // Pieces (a sweater's back, front and sleeves) are laid out separately and sewn together.
+    this.pieces = knit.pieces && knit.pieces.length ? knit.pieces : [{ index: 0, startNode: 0, inRound: knit.inRound, role: null, startRow: 0, endRow: knit.rows.length, edgeMarkers: [] }];
+    // Stitch size relative to the main needle, per loop, from the needle it was worked on.
+    this.sc = new Float32Array(this.n).fill(1);
+    if (opts.needleScale) for (let i = 0; i < this.n; i++) this.sc[i] = opts.needleScale(this.nodes[i].needle) || 1;
     this.constraints = []; // flat arrays below
     // Knit and purl faces sit on opposite sides of the fabric's mid-surface. Each loop
     // gets a preferred offset along the surface normal (toward the right side for a
@@ -70,7 +75,7 @@ export class Relaxer {
    */
   coursePlane(i, j, depth = 0) {
     const d = this.pull[i] - this.pull[j];
-    if (d === 0) return this.w;
+    if (d === 0) return this.w * this.scaleAt(i, j);
     const a = this.nodes[i], b = this.nodes[j];
     // A link with a neutral loop (cast on, bind off) follows the real link beside it.
     if ((!this.faceSign(a) || !this.faceSign(b)) && depth < 2) {
@@ -78,7 +83,7 @@ export class Relaxer {
       if (ca !== undefined && cb !== undefined && ca < this.n && cb < this.n && this.nodes[ca].row === this.nodes[cb].row) return this.coursePlane(ca, cb, depth + 1);
       const pa = a.parents[0], pb = b.parents[0];
       if (pa !== undefined && pb !== undefined && this.nodes[pa].row === this.nodes[pb].row) return this.coursePlane(pa, pb, depth + 1);
-      return this.w;
+      return this.w * this.scaleAt(i, j);
     }
     let same = 0, total = 0;
     const check = (x, y) => {
@@ -91,13 +96,16 @@ export class Relaxer {
     check(a.parents[0], b.parents[0]);
     check(a.children[0] < this.n ? a.children[0] : undefined, b.children[0] < this.n ? b.children[0] : undefined);
     const consistency = total ? same / total : 0.5;
-    return this.w * (1 - (1 - this.pullCourse) * consistency);
+    return this.w * this.scaleAt(i, j) * (1 - (1 - this.pullCourse) * consistency);
   }
+
+  /** Mean needle scale of two loops. */
+  scaleAt(i, j) { return 0.5 * (this.sc[i] + this.sc[j]); }
 
   /** In-plane length of a wale link; the fold runs along the course (garter ridges). */
   walePlane(i, p) {
     const d = this.pull[i] - this.pull[p];
-    if (d === 0) return this.h;
+    if (d === 0) return this.h * this.scaleAt(i, p);
     const a = this.nodes[i], b = this.nodes[p];
     const ra = this.knit.rows[a.row], rb = this.knit.rows[b.row];
     let same = 0, total = 0;
@@ -113,7 +121,7 @@ export class Relaxer {
     check(ra.nodes[a.pos + 1], rb.nodes[b.pos + (sameDir ? 1 : -1)]);
     check(ra.nodes[a.pos - 1], rb.nodes[b.pos - (sameDir ? 1 : -1)]);
     const consistency = total ? same / total : 0.5;
-    return this.h * (1 - (1 - this.pullWale) * consistency);
+    return this.h * this.scaleAt(i, p) * (1 - (1 - this.pullWale) * consistency);
   }
 
   get(i) { return [this.pos[3 * i], this.pos[3 * i + 1], this.pos[3 * i + 2]]; }
@@ -121,19 +129,24 @@ export class Relaxer {
 
   rowOf(node) { return this.knit.rows[node.row]; }
 
+  pieceOf(node) { return this.pieces[Math.min(node.piece || 0, this.pieces.length - 1)]; }
+
   buildInitial(prev) {
     const { nodes, w, h } = this;
     const rows = this.knit.rows;
-    // Radius for work in the round, from the cast-on count.
-    const castOnCount = rows.length ? rows[0].nodes.length : 1;
-    const R0 = Math.max(w, castOnCount * w / (2 * Math.PI));
+    // Radius for work in the round, from each piece's cast-on count.
+    const castOnOf = (pc) => (rows[pc.startRow] ? rows[pc.startRow].nodes.length : 1);
+    const fresh = this.pieces.map(() => true);
     let rnd = 1234567;
     const jitter = () => { rnd = (rnd * 1103515245 + 12345) & 0x7fffffff; return (rnd / 0x7fffffff - 0.5) * 0.05 * w; };
 
     for (let i = 0; i < this.n; i++) {
       const node = nodes[i];
-      if (prev && prev.has(i)) { const p = prev.get(i); this.set(i, p[0], p[1], p[2]); continue; }
+      if (prev && prev.has(i)) { const p = prev.get(i); this.set(i, p[0], p[1], p[2]); fresh[this.pieceOf(node).index] = false; continue; }
       const row = rows[node.row];
+      const pc = this.pieceOf(node);
+      const castOnCount = castOnOf(pc);
+      const R0 = Math.max(w, castOnCount * w / (2 * Math.PI));
       let x, y, z;
       if (node.pickedUp) {
         // Picked up along a selvedge: start one row height outward from the edge loop.
@@ -155,9 +168,9 @@ export class Relaxer {
         for (const p of ids) { x += this.pos[3 * p]; y += this.pos[3 * p + 1]; z += this.pos[3 * p + 2]; }
         x /= ids.length; y /= ids.length; z /= ids.length;
         y += h;
-      } else if (row.castOn || node.pos === 0 && row.index === 0) {
+      } else if (row.castOn || node.pos === 0 && row.index === pc.startRow) {
         // Cast-on edge.
-        if (this.inRound) {
+        if (pc.inRound) {
           const th = -2 * Math.PI * node.pos / Math.max(1, castOnCount);
           x = R0 * Math.sin(th); z = R0 * Math.cos(th); y = 0;
         } else {
@@ -191,7 +204,57 @@ export class Relaxer {
       }
       this.set(i, x + jitter(), y + jitter(), z + jitter());
     }
-    if (!prev && this.knit.closedLoop) this.bendIntoLoop();
+    if (this.pieces.length > 1) this.placePieces(fresh);
+    else if (!prev && this.knit.closedLoop) this.bendIntoLoop();
+  }
+
+  /**
+   * Put each freshly laid-out piece where it goes in the finished garment, so the seams
+   * only have to pull the edges together: the front and back face each other, and the
+   * sleeves stick out from the armholes like a sweater laid flat.
+   */
+  placePieces(fresh) {
+    const pos = this.pos, rows = this.knit.rows, h = this.h;
+    const ranges = this.pieces.map((pc, k) => [pc.startNode, k + 1 < this.pieces.length ? this.pieces[k + 1].startNode : this.n]);
+    const bbox = (k) => {
+      const [s, e] = ranges[k];
+      const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+      for (let i = s; i < e; i++) for (let a = 0; a < 3; a++) { min[a] = Math.min(min[a], pos[3 * i + a]); max[a] = Math.max(max[a], pos[3 * i + a]); }
+      return { min, max };
+    };
+    const boxes = this.pieces.map((_, k) => bbox(k));
+    const apply = (k, f) => { const [s, e] = ranges[k]; for (let i = s; i < e; i++) { const r = f(pos[3 * i], pos[3 * i + 1], pos[3 * i + 2]); pos[3 * i] = r[0]; pos[3 * i + 1] = r[1]; pos[3 * i + 2] = r[2]; } };
+    const front = this.pieces.find((p) => p.role === 'front'), back = this.pieces.find((p) => p.role === 'back');
+    const panels = this.pieces.filter((p) => p.role === 'front' || p.role === 'back');
+    let W = 0, yTop = 0;
+    for (const p of panels) { const b = boxes[p.index]; W = Math.max(W, b.max[0] - b.min[0]); yTop = Math.max(yTop, b.max[1]); }
+    const D = W / Math.PI; // half the body's depth: front and back a body's thickness apart
+    const ref = front || back;
+    let armDepth = 0;
+    if (ref && ref.edgeMarkers.length) armDepth = (ref.endRow - ref.edgeMarkers[ref.edgeMarkers.length - 1].row) * h;
+    let sleeves = 0, others = 0;
+    for (const pc of this.pieces) {
+      const k = pc.index;
+      if (!fresh[k]) continue;
+      const b = boxes[k];
+      const cx = (b.min[0] + b.max[0]) / 2, cz = (b.min[2] + b.max[2]) / 2;
+      if (pc.role === 'front' || pc.role === 'back') {
+        const sign = pc.role === 'front' ? 1 : -1;
+        apply(k, (x, y, z) => [sign * (x - cx), y, sign * z + sign * D]);
+      } else if (pc.role === 'sleeve' && sleeves < 2) {
+        const L = b.max[1] - b.min[1], r = (b.max[2] - b.min[2]) / 2;
+        const yc = yTop - (armDepth ? armDepth / 2 : r);
+        const gap = 0.5 * h;
+        if (sleeves === 0) apply(k, (x, y, z) => [y - b.min[1] - L - W / 2 - gap, -(x - cx) + yc, z - cz]);
+        else apply(k, (x, y, z) => [-(y - b.min[1]) + L + W / 2 + gap, (x - cx) + yc, z - cz]);
+        sleeves++;
+      } else {
+        // Anything else goes in a row to the right of the body.
+        const dx = W / 2 + 3 * this.w + others;
+        apply(k, (x, y, z) => [x - b.min[0] + dx, y, z]);
+        others += b.max[0] - b.min[0] + 3 * this.w;
+      }
+    }
   }
 
   /**
@@ -227,7 +290,7 @@ export class Relaxer {
 
   /** Outward normal of the fabric at a point (the right side faces +z when flat, outward when round). */
   normalAt(x, y, z, node) {
-    if (this.inRound) { const r = Math.hypot(x, z) || 1; return [x / r, 0, z / r]; }
+    if (this.pieceOf(node).inRound) { const r = Math.hypot(x, z) || 1; return [x / r, 0, z / r]; }
     return [0, 0, 1];
   }
 
@@ -329,7 +392,7 @@ export class Relaxer {
       const len = Math.hypot(...d) || 1;
       return d.map((v) => v / len);
     }
-    if (this.inRound) {
+    if (this.pieceOf(node).inRound) {
       const p = this.get(id);
       const r = Math.hypot(p[0], p[2]) || 1;
       // Tangent for decreasing angle: d/dθ (R sinθ, R cosθ) = (cosθ, -sinθ); decreasing θ flips it.
@@ -368,7 +431,7 @@ export class Relaxer {
           // Horizontal offset between this stitch and its parent, in stitch widths:
           // from increases/decreases, plus any cable crossing.
           const shift = (ci - (nc - 1) / 2) - (pi - (np - 1) / 2) + (node.cableShift || 0);
-          const dx = shift * w;
+          const dx = shift * w * this.sc[id];
           const hp = this.walePlane(id, p);
           this.addC(id, p, this.restWith(id, p, Math.hypot(hp, dx)), 1.0);
           // Diagonals to the parent's course neighbours (which are one column further along).
@@ -392,6 +455,20 @@ export class Relaxer {
           this.addC(a, b, this.restWith(a, b, this.coursePlane(a, b)), 1.0);
           if (ids.length > 1) { const a2 = ids[ids.length - 2]; this.addC(a2, b, this.restWith(a2, b, this.coursePlane(a2, a) + this.coursePlane(a, b)), 0.25); }
           if (next.nodes.length > 1) { const b2 = next.nodes[1]; this.addC(a, b2, this.restWith(a, b2, this.coursePlane(a, b) + this.coursePlane(b, b2)), 0.25); }
+        }
+      }
+    }
+    // Seams: sewn stitches sit a stitch apart, like course neighbours, with diagonals to
+    // the next pair along the seam so the two edges cannot slide past each other.
+    for (const seam of this.knit.seams || []) {
+      const pairs = seam.pairs;
+      for (let k = 0; k < pairs.length; k++) {
+        const [a, b] = pairs[k];
+        this.addC(a, b, w * this.scaleAt(a, b), 1.0);
+        if (k + 1 < pairs.length) {
+          const [a2, b2] = pairs[k + 1];
+          this.addC(a, b2, diag, 0.4);
+          this.addC(a2, b, diag, 0.4);
         }
       }
     }
