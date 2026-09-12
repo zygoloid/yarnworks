@@ -113,10 +113,14 @@ export class YarnPathBuilder {
     const pts = [];
     const yarnAt = [];
     const nodeAt = [];
+    const upAt = [];
     const strands = [];
     let strandStart = 0;
     const { w, h, d } = this;
-    const push = (p, node, frac) => { pts.push(p[0], p[1], p[2]); yarnAt.push(node.yarnStart + node.yarnLength * frac); nodeAt.push(node.id); };
+    const push = (p, node, frac) => {
+      pts.push(p[0], p[1], p[2]); yarnAt.push(node.yarnStart + node.yarnLength * frac); nodeAt.push(node.id);
+      const W = this.frames[node.id].W; upAt.push(W[0], W[1], W[2]);
+    };
 
     let prevNode = null;
     for (let i = 0; i < this.nodes.length; i++) {
@@ -244,6 +248,7 @@ export class YarnPathBuilder {
       points: new Float32Array(pts),
       yarn: new Float32Array(yarnAt),
       node: new Int32Array(nodeAt),
+      up: new Float32Array(upAt),
       strands: strands.filter((s) => s.end - s.start >= 2),
     };
   }

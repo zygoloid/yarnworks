@@ -570,7 +570,8 @@ function rebuildScene() {
   sim = { relaxer, w, h, yarnRadius, total, done: 0, batch: 20, raf: null, dragging: false, quality, colors, lastMesh: 0, meshInterval: 40, lastFrame: 0 };
   relaxer.centre();
   pathBuilder = new YarnPathBuilder(view, relaxer.pos, { stitchWidth: w, rowHeight: h, yarnRadius });
-  scene.setYarn(pathBuilder.build(), { radius: yarnRadius, plies: state.plies || 3, ...quality, colorAt: (len, id) => colors.colorAt(len, view.nodes[id].yarn) });
+  sim.path = pathBuilder.build();
+  scene.setYarn(sim.path, { radius: yarnRadius, plies: state.plies || 3, ...quality, colorAt: (len, id) => colors.colorAt(len, view.nodes[id].yarn) });
   scene.needleGroup.visible = false; scene.markerGroup.visible = false; scene.lifelineGroup.visible = false;
   if (!scene.fitted) { scene.fit(true); scene.fitted = true; }
   sim.raf = requestAnimationFrame(stepSim);
@@ -601,7 +602,8 @@ function stepSim() {
   const now = performance.now();
   if (now - s.lastMesh > (s.dragging ? 30 : s.meshInterval) || s.done >= s.total) {
     pathBuilder = new YarnPathBuilder(view, s.relaxer.pos, { stitchWidth: s.w, rowHeight: s.h, yarnRadius: s.yarnRadius });
-    scene.updateYarn(pathBuilder.build());
+    s.path = pathBuilder.build();
+    scene.updateYarn(s.path);
     s.lastMesh = performance.now();
     s.redrew = true;
   }
@@ -621,7 +623,8 @@ function finalizeSim() {
   for (let i = 0; i < view.nodes.length; i++) prevPositions.set(i, [pos[3 * i], pos[3 * i + 1], pos[3 * i + 2]]);
   lastPositions = pos;
   pathBuilder = new YarnPathBuilder(view, pos, { stitchWidth: s.w, rowHeight: s.h, yarnRadius: s.yarnRadius });
-  scene.updateYarn(pathBuilder.build());
+  s.path = pathBuilder.build();
+  scene.updateYarn(s.path);
   KnitScene.dispose(scene.needleGroup); KnitScene.dispose(scene.markerGroup); KnitScene.dispose(scene.lifelineGroup);
   const w = s.w;
   const needleRadius = (state.needle || 4) / 2;
@@ -662,13 +665,18 @@ let drag = null;
 function initDragging() {
   const canvas = $('canvas');
   const btn = $('move');
-  btn.addEventListener('click', () => { state.moveMode = !state.moveMode; btn.classList.toggle('on', state.moveMode); canvas.style.cursor = state.moveMode ? 'grab' : ''; });
+  btn.addEventListener('click', () => {
+    state.moveMode = !state.moveMode;
+    btn.classList.toggle('on', state.moveMode);
+    canvas.style.cursor = '';
+    if (!state.moveMode) scene.setHighlight(-1);
+  });
   $('reset-shape').addEventListener('click', () => { prevPositions = null; prevKey = null; scheduleUpdate(true); });
 
   canvas.addEventListener('pointerdown', (ev) => {
     if (!state.moveMode || ev.button !== 0 || !sim) return;
     const pos = sim.relaxer.pos;
-    const id = scene.pickNode(ev.clientX, ev.clientY, pos);
+    const id = scene.pickNode(ev.clientX, ev.clientY, sim.path, sim.yarnRadius);
     if (id < 0) return;
     ev.preventDefault();
     scene.controls.enabled = false;
@@ -688,6 +696,13 @@ function initDragging() {
     if (!sim.raf) sim.raf = requestAnimationFrame(stepSim);
   });
   canvas.addEventListener('pointermove', (ev) => {
+    if (!drag && sim && state.moveMode) {
+      // Show which stitch a press would grab.
+      const id = scene.pickNode(ev.clientX, ev.clientY, sim.path, sim.yarnRadius);
+      scene.setHighlight(id);
+      canvas.style.cursor = id >= 0 ? 'grab' : '';
+      return;
+    }
     if (!drag || !sim) return;
     const p = scene.pointerOnPlane(ev.clientX, ev.clientY, drag.origin);
     if (!p) return;

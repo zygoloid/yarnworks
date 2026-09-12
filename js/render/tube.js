@@ -160,17 +160,22 @@ export function buildYarnMesh(path, opts) {
     for (const strand of p.strands) {
       const sub = subdivide(p.points, strand.start, strand.end, opts.subdivisions, p.yarn);
       const { pts, attr } = smoothPolyline(sub.pts, sub.attr, opts.subdivisions);
+      const n = pts.length / 3;
+      const nodeIds = new Float32Array(n);
+      const up = new Float32Array(n * 3);
       let colors = null;
-      if (withColors) {
-        const n = pts.length / 3;
-        colors = new Float32Array(n * 3);
-        for (let i = 0; i < n; i++) {
-          const nodeId = p.node[Math.min(strand.end - 1, strand.start + Math.floor(i / opts.subdivisions))];
+      if (withColors) colors = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) {
+        const ci = Math.min(strand.end - 1, strand.start + Math.floor(i / opts.subdivisions));
+        const nodeId = p.node[ci];
+        nodeIds[i] = nodeId;
+        up[3 * i] = p.up[3 * ci]; up[3 * i + 1] = p.up[3 * ci + 1]; up[3 * i + 2] = p.up[3 * ci + 2];
+        if (withColors) {
           const c = opts.colorAt(attr[i], nodeId);
           colors[3 * i] = c[0]; colors[3 * i + 1] = c[1]; colors[3 * i + 2] = c[2];
         }
       }
-      strands.push({ pts, colors });
+      strands.push({ pts, colors, attr, nodeIds, up });
     }
     return strands;
   };

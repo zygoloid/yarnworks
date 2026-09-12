@@ -12,7 +12,8 @@ in vec3 pa;      // segment start (object space)
 in vec3 pb;      // segment end
 in vec3 ca;      // colour at start (linear)
 in vec3 cb;      // colour at end
-in vec2 sab;     // arc length along the strand at start / end
+in vec2 sab;     // unstretched yarn length at start / end (as consumed when knit)
+in float nid;    // stitch (node) id this segment belongs to
 in vec3 na;      // reference normal at the start (parallel transported), for the ply phase
 in vec3 nb;      // reference normal at the end
 in vec3 da;      // bisector plane normal at the start (average direction with the previous segment)
@@ -26,6 +27,7 @@ flat out vec3 fB;
 flat out vec3 fCa;
 flat out vec3 fCb;
 flat out vec2 fS;
+flat out float fNid;
 flat out vec3 fN;
 flat out vec3 fNb;
 flat out vec3 fDa;
@@ -56,7 +58,7 @@ void main() {
   vec3 centre = mid + tc * (radius * 1.1 + 0.5 * len * along);
   vec3 p = centre + v * (position.x * (halfProj + R)) + u * (position.y * R);
   vWorld = p;
-  fA = a; fB = b; fCa = ca; fCb = cb; fS = sab;
+  fA = a; fB = b; fCa = ca; fCb = cb; fS = sab; fNid = nid;
   fN = normalize(mat3(modelMatrix) * na);
   fNb = normalize(mat3(modelMatrix) * nb);
   fDa = normalize(mat3(modelMatrix) * da);
@@ -74,6 +76,7 @@ flat in vec3 fB;
 flat in vec3 fCa;
 flat in vec3 fCb;
 flat in vec2 fS;
+flat in float fNid;
 flat in vec3 fN;
 flat in vec3 fNb;
 flat in vec3 fDa;
@@ -86,6 +89,7 @@ uniform float aaRim;           // 1 when the framebuffer is multisampled (alpha-
 uniform float plies;
 uniform float plyPitch;        // arc length of one full twist
 uniform float fibreBump;
+uniform float highlight;  // node id to highlight, or -1
 uniform vec3 hemiSky;
 uniform vec3 hemiGround;
 uniform vec3 lightDir[4];
@@ -313,6 +317,7 @@ void main() {
   float shade = ao * (0.85 + 0.3 * mix(0.5, f0, detail));
 
   vec3 albedo = mix(fCa, fCb, s) * shade;
+  if (abs(fNid - highlight) < 0.5) albedo = mix(albedo, vec3(1.0, 0.8, 0.15), 0.7);
   vec3 col = albedo * mix(hemiGround, hemiSky, 0.5 + 0.5 * n.y);
   vec3 spec = vec3(0.0);
   for (int i = 0; i < 4; i++) {
@@ -331,52 +336,96 @@ void main() {
 `;
 
 /**
- * Parallel-transport reference normals along a polyline.
- * @returns {Float32Array} one normal per point
+ * Reference normals along a polyline for the ply twist. Within each stitch the frame is
+ * parallel-transported (rotation minimising), but it is anchored at the start of every
+ * stitch to that stitch's own up direction, and the mismatch with the next stitch's anchor
+ * is spread across the stitch. So the twist depends only on the local geometry: moving
+ * one part of the fabric does not rotate the plies elsewhere.
+ * @param {Float32Array|number[]} pts xyz per point
+ * @param {Float32Array} ids stitch id per point
+ * @param {Float32Array} up anchor vector (stitch up direction) per point
+ * @returns {Float32Array} one unit normal per point
  */
-function transportNormals(pts) {
+function transportNormals(pts, ids, up) {
   const n = pts.length / 3;
   const out = new Float32Array(n * 3);
-  let prev = null;
+  const tan = new Float32Array(n * 3);
   for (let i = 0; i < n; i++) {
     const i0 = Math.max(0, i - 1), i1 = Math.min(n - 1, i + 1);
     let tx = pts[3 * i1] - pts[3 * i0], ty = pts[3 * i1 + 1] - pts[3 * i0 + 1], tz = pts[3 * i1 + 2] - pts[3 * i0 + 2];
     const l = Math.hypot(tx, ty, tz) || 1;
-    tx /= l; ty /= l; tz /= l;
-    let nx, ny, nz;
-    if (prev === null) {
-      let ax = 0, ay = 0, az = 1;
-      if (Math.abs(tz) > 0.9) { ax = 1; az = 0; }
-      const d = ax * tx + ay * ty + az * tz;
+    tan[3 * i] = tx / l; tan[3 * i + 1] = ty / l; tan[3 * i + 2] = tz / l;
+  }
+  // Project an anchor vector onto the plane perpendicular to the tangent at i.
+  const anchor = (i, out3) => {
+    const tx = tan[3 * i], ty = tan[3 * i + 1], tz = tan[3 * i + 2];
+    let ax = up ? up[3 * i] : 0, ay = up ? up[3 * i + 1] : 1, az = up ? up[3 * i + 2] : 0;
+    let d = ax * tx + ay * ty + az * tz;
+    let nx = ax - d * tx, ny = ay - d * ty, nz = az - d * tz;
+    let nl = Math.hypot(nx, ny, nz);
+    if (nl < 0.3) {
+      // Up is nearly along the yarn here: use any perpendicular instead.
+      ax = Math.abs(tz) > 0.9 ? 1 : 0; ay = 0; az = Math.abs(tz) > 0.9 ? 0 : 1;
+      d = ax * tx + ay * ty + az * tz;
       nx = ax - d * tx; ny = ay - d * ty; nz = az - d * tz;
-    } else {
-      const d = prev[0] * tx + prev[1] * ty + prev[2] * tz;
-      nx = prev[0] - d * tx; ny = prev[1] - d * ty; nz = prev[2] - d * tz;
+      nl = Math.hypot(nx, ny, nz) || 1;
     }
-    const nl = Math.hypot(nx, ny, nz) || 1;
-    nx /= nl; ny /= nl; nz /= nl;
-    prev = [nx, ny, nz];
-    out[3 * i] = nx; out[3 * i + 1] = ny; out[3 * i + 2] = nz;
+    out3[0] = nx / nl; out3[1] = ny / nl; out3[2] = nz / nl;
+  };
+  const a = [0, 0, 0], tr = [0, 0, 0];
+  const transportStep = (i, v) => {
+    // Move v from the plane at i-1 to the plane at i.
+    const tx = tan[3 * i], ty = tan[3 * i + 1], tz = tan[3 * i + 2];
+    const d = v[0] * tx + v[1] * ty + v[2] * tz;
+    v[0] -= d * tx; v[1] -= d * ty; v[2] -= d * tz;
+    const l = Math.hypot(v[0], v[1], v[2]) || 1;
+    v[0] /= l; v[1] /= l; v[2] /= l;
+  };
+  let start = 0;
+  while (start < n) {
+    let end = start + 1;
+    while (end < n && (!ids || ids[end] === ids[start])) end++;
+    // Transport from the anchor at `start` through the stitch.
+    anchor(start, tr);
+    for (let i = start; i < end; i++) {
+      if (i > start) transportStep(i, tr);
+      out[3 * i] = tr[0]; out[3 * i + 1] = tr[1]; out[3 * i + 2] = tr[2];
+    }
+    if (end < n) {
+      // Mismatch between the transported frame and the next stitch's anchor: spread it.
+      const v = [tr[0], tr[1], tr[2]];
+      transportStep(end, v);
+      anchor(end, a);
+      const tx = tan[3 * end], ty = tan[3 * end + 1], tz = tan[3 * end + 2];
+      // Signed angle from v to a about the tangent.
+      const cx = v[1] * a[2] - v[2] * a[1], cy = v[2] * a[0] - v[0] * a[2], cz = v[0] * a[1] - v[1] * a[0];
+      const delta = Math.atan2(cx * tx + cy * ty + cz * tz, v[0] * a[0] + v[1] * a[1] + v[2] * a[2]);
+      const len = end - start;
+      for (let i = start + 1; i < end; i++) {
+        const ang = delta * (i - start) / len;
+        const s = Math.sin(ang), c = Math.cos(ang);
+        const tx2 = tan[3 * i], ty2 = tan[3 * i + 1], tz2 = tan[3 * i + 2];
+        const vx = out[3 * i], vy = out[3 * i + 1], vz = out[3 * i + 2];
+        // Rodrigues rotation of v about the tangent.
+        const kx = ty2 * vz - tz2 * vy, ky = tz2 * vx - tx2 * vz, kz = tx2 * vy - ty2 * vx;
+        out[3 * i] = vx * c + kx * s; out[3 * i + 1] = vy * c + ky * s; out[3 * i + 2] = vz * c + kz * s;
+      }
+    }
+    start = end;
   }
   return out;
 }
 
-/**
- * Build an instanced mesh of capsule impostors for a set of polylines.
- * @param {Array<{pts: Float32Array|number[], colors: Float32Array|number[], arc?: Float32Array}>} strands
- *   pts: xyz per point; colors: linear rgb per point.
- * @param {object} opts {radius, plies, plyAmount, plyPitch}
- */
 /** Fill the per-segment geometry attributes (positions, frames, arc lengths) from strand polylines. */
 function fillSegments(strands, buf, withColors) {
-  const { pa, pb, ca, cb, sab, na, nb: nbArr, da, db } = buf;
+  const { pa, pb, ca, cb, sab, na, nb: nbArr, da, db, nid } = buf;
   let k = 0;
   const box = new THREE.Box3();
   const v = new THREE.Vector3();
   for (const s of strands) {
     const pts = s.pts, cols = s.colors;
     const n = pts.length / 3;
-    const normals = transportNormals(pts);
+    const normals = transportNormals(pts, s.nodeIds, s.up);
     // Unit direction of each segment, and the bisector direction at each point.
     const dir = new Float32Array(Math.max(0, n - 1) * 3);
     for (let i = 0; i < n - 1; i++) {
@@ -391,10 +440,8 @@ function fillSegments(strands, buf, withColors) {
       if (l < 1e-6) return [dir[3 * i1], dir[3 * i1 + 1], dir[3 * i1 + 2]];
       return [x / l, y / l, z / l];
     };
-    let arc = 0;
+    const rest = s.attr, ids = s.nodeIds;
     for (let i = 0; i < n - 1; i++) {
-      const dx = pts[3 * i + 3] - pts[3 * i], dy = pts[3 * i + 4] - pts[3 * i + 1], dz = pts[3 * i + 5] - pts[3 * i + 2];
-      const len = Math.hypot(dx, dy, dz);
       const ba = bis(i), bb = bis(i + 1);
       for (let c = 0; c < 3; c++) {
         pa[3 * k + c] = pts[3 * i + c]; pb[3 * k + c] = pts[3 * i + 3 + c];
@@ -403,8 +450,12 @@ function fillSegments(strands, buf, withColors) {
         nbArr[3 * k + c] = normals[3 * i + 3 + c];
         da[3 * k + c] = ba[c]; db[3 * k + c] = bb[c];
       }
-      sab[2 * k] = arc; sab[2 * k + 1] = arc + len;
-      arc += len;
+      if (withColors) {
+        // The twist and fibres are keyed to the yarn's unstretched length, so they stay
+        // put when the fabric is stretched or moved.
+        sab[2 * k] = rest ? rest[i] : 0; sab[2 * k + 1] = rest ? rest[i + 1] : 0;
+        nid[k] = ids ? ids[i] : -1;
+      }
       box.expandByPoint(v.set(pts[3 * i], pts[3 * i + 1], pts[3 * i + 2]));
       k++;
     }
@@ -418,7 +469,7 @@ export function updateCapsuleMesh(mesh, strands) {
   const g = mesh.geometry;
   const buf = mesh.userData.buffers;
   const { box } = fillSegments(strands, buf, false);
-  for (const name of ['pa', 'pb', 'na', 'nb', 'da', 'db', 'sab']) g.attributes[name].needsUpdate = true;
+  for (const name of ['pa', 'pb', 'na', 'nb', 'da', 'db']) g.attributes[name].needsUpdate = true;
   box.expandByScalar(mesh.material.uniforms.radius.value * 2);
   g.boundingBox = box;
   g.boundingSphere = box.getBoundingSphere(new THREE.Sphere());
@@ -432,7 +483,8 @@ export function buildCapsuleMesh(strands, opts) {
   const sab = new Float32Array(total * 2), na = new Float32Array(total * 3);
   const da = new Float32Array(total * 3), db = new Float32Array(total * 3);
   const nbArr = new Float32Array(total * 3);
-  const buffers = { pa, pb, ca, cb, sab, na, nb: nbArr, da, db };
+  const nid = new Float32Array(total);
+  const buffers = { pa, pb, ca, cb, sab, na, nb: nbArr, da, db, nid };
   const { box } = fillSegments(strands, buffers, true);
   const geo = new THREE.InstancedBufferGeometry();
   // A quad: corners in [-1, 1]^2.
@@ -443,6 +495,7 @@ export function buildCapsuleMesh(strands, opts) {
   geo.setAttribute('ca', new THREE.InstancedBufferAttribute(ca, 3));
   geo.setAttribute('cb', new THREE.InstancedBufferAttribute(cb, 3));
   geo.setAttribute('sab', new THREE.InstancedBufferAttribute(sab, 2));
+  geo.setAttribute('nid', new THREE.InstancedBufferAttribute(nid, 1));
   geo.setAttribute('na', new THREE.InstancedBufferAttribute(na, 3));
   geo.setAttribute('nb', new THREE.InstancedBufferAttribute(nbArr, 3));
   geo.setAttribute('da', new THREE.InstancedBufferAttribute(da, 3));
@@ -463,6 +516,7 @@ export function buildCapsuleMesh(strands, opts) {
       plies: { value: opts.plies ?? 3 },
       plyPitch: { value: opts.plyPitch ?? opts.radius * 7 },
       fibreBump: { value: opts.fibreBump ?? 0.9 },
+      highlight: { value: -1 },
       hemiSky: { value: new THREE.Color(0.62, 0.62, 0.62) },
       hemiGround: { value: new THREE.Color(0.30, 0.28, 0.27) },
       lightDir: { value: [new THREE.Vector3(100, 220, 180), new THREE.Vector3(-160, -60, 140), new THREE.Vector3(20, 80, -220), new THREE.Vector3(-40, -200, -60)] },

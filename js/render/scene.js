@@ -88,29 +88,45 @@ export class KnitScene {
     if (g && g.userData.update) { g.userData.update(path); this.needsRender = true; }
   }
 
-  /** Index of the node whose projected position is nearest the pointer, within `px` pixels, or -1. */
-  pickNode(clientX, clientY, positions, px = 14) {
+  /**
+   * The stitch under the pointer: tests the yarn path's points (several per stitch) with a
+   * radius that follows the yarn's on-screen thickness, preferring the strand nearest the
+   * camera. Returns the node id or -1.
+   */
+  pickNode(clientX, clientY, path, yarnRadius) {
     const rect = this.canvas.getBoundingClientRect();
     const sx = ((clientX - rect.left) / rect.width) * 2 - 1;
     const sy = -((clientY - rect.top) / rect.height) * 2 + 1;
     this.camera.updateMatrixWorld();
     const m = new THREE.Matrix4().multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse);
     const e = m.elements;
-    let best = -1, bestD = (px / rect.width * 2) ** 2, bestZ = Infinity;
-    const n = positions.length / 3;
+    const aspect = rect.height / rect.width;
+    const p11 = this.camera.projectionMatrix.elements[5];
+    const pts = path.points, ids = path.node;
+    const n = pts.length / 3;
+    let best = -1, bestZ = Infinity;
     for (let i = 0; i < n; i++) {
-      const x = positions[3 * i], y = positions[3 * i + 1], z = positions[3 * i + 2];
+      const x = pts[3 * i], y = pts[3 * i + 1], z = pts[3 * i + 2];
       const cw = e[3] * x + e[7] * y + e[11] * z + e[15];
       if (cw <= 0) continue;
       const cx = (e[0] * x + e[4] * y + e[8] * z + e[12]) / cw;
       const cy = (e[1] * x + e[5] * y + e[9] * z + e[13]) / cw;
+      // Yarn radius in NDC x units at this depth, plus a margin of a few pixels.
+      const rNdc = yarnRadius * p11 / cw * aspect * 1.6 + 6 / rect.width * 2;
+      const dx = cx - sx, dy = (cy - sy) * aspect;
+      if (dx * dx + dy * dy > rNdc * rNdc) continue;
       const cz = (e[2] * x + e[6] * y + e[10] * z + e[14]) / cw;
-      const dx = cx - sx, dy = (cy - sy) * (rect.height / rect.width);
-      const d = dx * dx + dy * dy;
-      // Prefer the nearest to the pointer; among near ties, the one closest to the camera.
-      if (d < bestD * 0.25 && cz < bestZ || (d < bestD && best < 0)) { best = i; bestD = Math.max(d, bestD * 0.25); bestZ = cz; }
+      if (cz < bestZ) { bestZ = cz; best = ids[i]; }
     }
     return best;
+  }
+
+  /** Highlight a stitch (node id) in the yarn, or -1 for none. */
+  setHighlight(id) {
+    if (this.yarnMaterial && this.yarnMaterial.uniforms.highlight.value !== id) {
+      this.yarnMaterial.uniforms.highlight.value = id;
+      this.needsRender = true;
+    }
   }
 
   /** World point where the pointer ray meets the plane through `origin` facing the camera. */
