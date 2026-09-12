@@ -567,7 +567,7 @@ function rebuildScene() {
   const n = view.nodes.length;
   const quality = n < 3000 ? { subdivisions: 7 } : n < 8000 ? { subdivisions: 5 } : n < 20000 ? { subdivisions: 3 } : { subdivisions: 2 };
   const colors = new YarnColors(state.yarns);
-  sim = { relaxer, w, h, yarnRadius, total, done: 0, batch: 20, raf: null, dragging: false, quality, colors, lastMesh: 0, meshInterval: 40, lastFrame: 0 };
+  sim = { relaxer, w, h, yarnRadius, total, done: 0, batch: 20, raf: null, dragging: false, settleSteps: 0, quality, colors, lastMesh: 0, meshInterval: 40, lastFrame: 0 };
   relaxer.centre();
   pathBuilder = new YarnPathBuilder(view, relaxer.pos, { stitchWidth: w, rowHeight: h, yarnRadius });
   sim.path = pathBuilder.build();
@@ -592,11 +592,21 @@ function stepSim() {
   s.lastFrame = t0;
   s.redrew = false;
   const remaining = s.total - s.done;
-  const k = s.dragging ? Math.min(s.batch, 12) : Math.min(s.batch, remaining);
-  if (k > 0) { s.relaxer.relax(k); s.done += k; }
+  let k;
+  if (s.dragging || s.settleSteps > 0) {
+    // Global solve: a pull is felt across the whole piece in one step.
+    if (!s.relaxer.direct && s.relaxer.direct !== null) $('status').textContent = `${view.nodes.length} stitches · preparing solver`;
+    s.relaxer.relax(1);
+    k = 1;
+    if (!s.dragging) s.settleSteps--;
+    s.done = Math.min(s.done + 1, s.total);
+  } else {
+    k = Math.min(s.batch, remaining);
+    if (k > 0) { s.relaxer.relaxGaussSeidel(k); s.done += k; }
+  }
   const dt = performance.now() - t0;
   // Aim for about 18 ms of relaxation per frame.
-  s.batch = Math.max(3, Math.min(80, Math.round(k * 18 / Math.max(dt, 1))));
+  if (!(s.dragging || s.settleSteps > 0)) s.batch = Math.max(3, Math.min(80, Math.round(k * 18 / Math.max(dt, 1))));
   if (!s.dragging) s.relaxer.centre();
   // Redraw, but not more often than the mesh update costs allow.
   const now = performance.now();
@@ -607,7 +617,7 @@ function stepSim() {
     s.lastMesh = performance.now();
     s.redrew = true;
   }
-  if (s.done < s.total || s.dragging) {
+  if (s.done < s.total || s.dragging || s.settleSteps > 0) {
     $('status').textContent = s.dragging ? `${view.nodes.length} stitches · moving` : `${view.nodes.length} stitches · relaxing ${Math.round(100 * s.done / s.total)}%`;
     s.raf = requestAnimationFrame(stepSim);
     return;
@@ -682,14 +692,7 @@ function initDragging() {
     scene.controls.enabled = false;
     try { canvas.setPointerCapture(ev.pointerId); } catch (e) { /* synthetic events have no active pointer */ }
     const origin = [pos[3 * id], pos[3 * id + 1], pos[3 * id + 2]];
-    // Neighbourhood that follows the grabbed stitch, with a smooth falloff.
-    const R = 3.5 * sim.w;
-    const follow = [];
-    for (let i = 0; i < view.nodes.length; i++) {
-      const d = Math.hypot(pos[3 * i] - origin[0], pos[3 * i + 1] - origin[1], pos[3 * i + 2] - origin[2]);
-      if (d < R && i !== id) follow.push([i, (1 - d / R) ** 2]);
-    }
-    drag = { id, origin, follow, last: [0, 0, 0] };
+    drag = { id, origin };
     sim.dragging = true;
     sim.relaxer.pin(id, origin.slice());
     canvas.style.cursor = 'grabbing';
@@ -706,11 +709,7 @@ function initDragging() {
     if (!drag || !sim) return;
     const p = scene.pointerOnPlane(ev.clientX, ev.clientY, drag.origin);
     if (!p) return;
-    const delta = [p[0] - drag.origin[0], p[1] - drag.origin[1], p[2] - drag.origin[2]];
-    const step = [delta[0] - drag.last[0], delta[1] - drag.last[1], delta[2] - drag.last[2]];
-    drag.last = delta;
     const pos = sim.relaxer.pos;
-    for (const [i, wgt] of drag.follow) { pos[3 * i] += step[0] * wgt; pos[3 * i + 1] += step[1] * wgt; pos[3 * i + 2] += step[2] * wgt; }
     sim.relaxer.pin(drag.id, p);
     pos[3 * drag.id] = p[0]; pos[3 * drag.id + 1] = p[1]; pos[3 * drag.id + 2] = p[2];
   });
@@ -719,7 +718,9 @@ function initDragging() {
     sim.relaxer.pin(drag.id, null);
     drag = null;
     sim.dragging = false;
-    sim.total = sim.done + Math.min(300, 60 + Math.round(Math.sqrt(view.nodes.length) * 3));
+    // Settle with the global solver for a while, then finish.
+    sim.settleSteps = 25;
+    sim.total = Math.max(sim.total, sim.done);
     scene.controls.enabled = true;
     canvas.style.cursor = state.moveMode ? 'grab' : '';
     if (!sim.raf) sim.raf = requestAnimationFrame(stepSim);

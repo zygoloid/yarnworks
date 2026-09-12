@@ -371,8 +371,206 @@ export class Relaxer {
     if (p) this.pins.set(id, p); else this.pins.delete(id);
   }
 
-  /** Run `iters` Gauss-Seidel iterations. */
+  /**
+   * Run `iters` relaxation steps. Each step freezes every constraint's current direction
+   * and solves, globally, for the positions that best satisfy all of them at once (the
+   * weighted connection graph as a sparse linear system, solved by preconditioned
+   * conjugate gradients). A pull on one stitch is felt across the whole piece in a single
+   * step, instead of creeping one stitch per iteration as Gauss-Seidel does.
+   */
   relax(iters) {
+    for (let it = 0; it < iters; it++) {
+      this.iteration = (this.iteration || 0) + 1;
+      this.globalStep();
+      if (it % 2 === 0) this.smooth(0.45);
+      if (this.pins) for (const [id, p] of this.pins) { this.pos[3 * id] = p[0]; this.pos[3 * id + 1] = p[1]; this.pos[3 * id + 2] = p[2]; }
+    }
+  }
+
+  /**
+   * Build the direct solver: the system matrix (anchor + weighted graph Laplacian of the
+   * constraints) is constant, so it is reordered to a narrow band (reverse Cuthill-McKee)
+   * and Cholesky-factorised once. Every step then solves it exactly, so a pull anywhere
+   * is felt everywhere at once.
+   */
+  buildDirect() {
+    const n = this.n, c = this.c, nc = c.length / 4;
+    const lambda = this.lambda;
+    // Adjacency with summed weights.
+    const adj = Array.from({ length: n }, () => new Map());
+    for (let k = 0; k < nc; k++) {
+      const i = c[4 * k], j = c[4 * k + 1], w = c[4 * k + 3];
+      adj[i].set(j, (adj[i].get(j) || 0) + w);
+      adj[j].set(i, (adj[j].get(i) || 0) + w);
+    }
+    // Reverse Cuthill-McKee ordering from a peripheral node (two BFS passes).
+    const bfsOrder = (start) => {
+      const seen = new Uint8Array(n), order = [];
+      const push = (s) => { seen[s] = 1; order.push(s); };
+      push(start);
+      for (let h = 0; h < order.length; h++) {
+        const u = order[h];
+        const nb = [...adj[u].keys()].filter((v) => !seen[v]).sort((a, b) => adj[a].size - adj[b].size);
+        for (const v of nb) push(v);
+      }
+      for (let s = 0; s < n; s++) if (!seen[s]) { // disconnected pieces
+        push(s);
+        for (let h = order.length - 1; h < order.length; h++) {
+          const u = order[h];
+          for (const v of adj[u].keys()) if (!seen[v]) push(v);
+        }
+      }
+      return order;
+    };
+    let order = bfsOrder(0);
+    order = bfsOrder(order[order.length - 1]).reverse();
+    const inv = new Int32Array(n);
+    order.forEach((old, i) => { inv[old] = i; });
+    let bw = 0;
+    for (let k = 0; k < nc; k++) bw = Math.max(bw, Math.abs(inv[c[4 * k]] - inv[c[4 * k + 1]]));
+    if (n * (bw + 1) > 4e7) { this.direct = null; return false; }
+    const W = bw + 1;
+    const L = new Float64Array(n * W); // L[r*W + (r-c)] for c in [r-bw, r]
+    // Fill the permuted matrix into L, then factorise in place.
+    for (let r = 0; r < n; r++) {
+      const old = order[r];
+      let d = lambda;
+      for (const [v, w] of adj[old]) {
+        d += w;
+        const cIdx = inv[v];
+        if (cIdx < r) L[r * W + (r - cIdx)] -= w;
+      }
+      L[r * W] += d;
+    }
+    for (let r = 0; r < n; r++) {
+      const c0 = Math.max(0, r - bw);
+      for (let cc = c0; cc <= r; cc++) {
+        let sum = L[r * W + (r - cc)];
+        const t0 = Math.max(c0, cc - bw);
+        for (let t = t0; t < cc; t++) sum -= L[r * W + (r - t)] * L[cc * W + (cc - t)];
+        if (cc === r) {
+          if (sum <= 1e-12) { this.direct = null; return false; }
+          L[r * W] = Math.sqrt(sum);
+        } else {
+          L[r * W + (r - cc)] = sum / L[cc * W];
+        }
+      }
+    }
+    this.direct = { L, W, bw, order, inv, y: new Float64Array(n), bp: new Float64Array(n), xp: new Float64Array(n), pinCache: new Map() };
+    return true;
+  }
+
+  /** Solve A x = b (both in original node order, one component). */
+  solveDirect(b, x) {
+    const { L, W, bw, order, inv, y, bp } = this.direct;
+    const n = this.n;
+    for (let r = 0; r < n; r++) bp[r] = b[order[r]];
+    for (let r = 0; r < n; r++) {
+      let sum = bp[r];
+      const t0 = Math.max(0, r - bw);
+      for (let t = t0; t < r; t++) sum -= L[r * W + (r - t)] * y[t];
+      y[r] = sum / L[r * W];
+    }
+    for (let r = n - 1; r >= 0; r--) {
+      let sum = y[r];
+      const t1 = Math.min(n - 1, r + bw);
+      for (let t = r + 1; t <= t1; t++) sum -= L[t * W + (t - r)] * bp[t];
+      bp[r] = sum / L[r * W];
+    }
+    for (let r = 0; r < n; r++) x[order[r]] = bp[r];
+  }
+
+  /** One projective-dynamics step: local projection of each constraint, then the global solve. */
+  globalStep() {
+    const pos = this.pos, n = this.n;
+    const c = this.c, nc = c.length / 4;
+    if (this.direct === undefined) { this.lambda = 0.002; this.buildDirect(); }
+    if (!this.direct) return this.globalStepCG();
+    if (!this.pdb) this.pdb = { bx: new Float64Array(n), by: new Float64Array(n), bz: new Float64Array(n), x: new Float64Array(n) };
+    const { bx, by, bz, x } = this.pdb;
+    const lambda = this.lambda;
+    for (let i = 0; i < n; i++) { bx[i] = lambda * pos[3 * i]; by[i] = lambda * pos[3 * i + 1]; bz[i] = lambda * pos[3 * i + 2]; }
+    for (let k = 0; k < nc; k++) {
+      const i = c[4 * k], j = c[4 * k + 1], rest = c[4 * k + 2], w = c[4 * k + 3];
+      let dx = pos[3 * i] - pos[3 * j], dy = pos[3 * i + 1] - pos[3 * j + 1], dz = pos[3 * i + 2] - pos[3 * j + 2];
+      const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-6;
+      const t = w * rest / d; dx *= t; dy *= t; dz *= t;
+      bx[i] += dx; by[i] += dy; bz[i] += dz;
+      bx[j] -= dx; by[j] -= dy; bz[j] -= dz;
+    }
+    // Pins: rank-one (Woodbury) corrections to the fixed factorisation.
+    const kPin = 40;
+    const pins = this.pins ? [...this.pins.entries()] : [];
+    const pinW = pins.map(([id]) => {
+      let w = this.direct.pinCache.get(id);
+      if (!w) { const e = new Float64Array(n); e[id] = 1; w = new Float64Array(n); this.solveDirect(e, w); this.direct.pinCache.set(id, w); }
+      return w;
+    });
+    const comps = [bx, by, bz];
+    for (let comp = 0; comp < 3; comp++) {
+      const b = comps[comp];
+      pins.forEach(([id, p]) => { b[id] += kPin * p[comp]; });
+      this.solveDirect(b, x);
+      pins.forEach(([id], pi) => {
+        const w = pinW[pi];
+        const f = kPin * x[id] / (1 + kPin * w[id]);
+        for (let i = 0; i < n; i++) x[i] -= f * w[i];
+      });
+      for (let i = 0; i < n; i++) pos[3 * i + comp] = x[i];
+    }
+    // Collisions are handled as position corrections after the solve.
+    this.collide();
+  }
+
+  /** Fallback when the band is too wide: a few conjugate-gradient sweeps (propagates slowly). */
+  globalStepCG() {
+    const pos = this.pos, n = this.n, N = 3 * n;
+    const c = this.c, nc = c.length / 4;
+    const lambda = this.lambda, kPin = 40;
+    if (!this.pd) this.pd = { b: new Float32Array(N), diag: new Float32Array(n), r: new Float32Array(N), z: new Float32Array(N), q: new Float32Array(N), Aq: new Float32Array(N) };
+    const { b, diag, r, z, q, Aq } = this.pd;
+    for (let i = 0; i < n; i++) { diag[i] = lambda; b[3 * i] = lambda * pos[3 * i]; b[3 * i + 1] = lambda * pos[3 * i + 1]; b[3 * i + 2] = lambda * pos[3 * i + 2]; }
+    if (this.pins) for (const [id, p] of this.pins) { diag[id] += kPin; b[3 * id] += kPin * p[0]; b[3 * id + 1] += kPin * p[1]; b[3 * id + 2] += kPin * p[2]; }
+    for (let k = 0; k < nc; k++) {
+      const i = c[4 * k], j = c[4 * k + 1], rest = c[4 * k + 2], w = c[4 * k + 3];
+      let dx = pos[3 * i] - pos[3 * j], dy = pos[3 * i + 1] - pos[3 * j + 1], dz = pos[3 * i + 2] - pos[3 * j + 2];
+      const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-6;
+      const t = w * rest / d; dx *= t; dy *= t; dz *= t;
+      b[3 * i] += dx; b[3 * i + 1] += dy; b[3 * i + 2] += dz;
+      b[3 * j] -= dx; b[3 * j + 1] -= dy; b[3 * j + 2] -= dz;
+      diag[i] += w; diag[j] += w;
+    }
+    const pinIds = this.pins ? [...this.pins.keys()] : [];
+    const applyA = (v, out) => {
+      for (let i = 0; i < n; i++) { out[3 * i] = lambda * v[3 * i]; out[3 * i + 1] = lambda * v[3 * i + 1]; out[3 * i + 2] = lambda * v[3 * i + 2]; }
+      for (const id of pinIds) { out[3 * id] += kPin * v[3 * id]; out[3 * id + 1] += kPin * v[3 * id + 1]; out[3 * id + 2] += kPin * v[3 * id + 2]; }
+      for (let k = 0; k < nc; k++) {
+        const i = c[4 * k], j = c[4 * k + 1], w = c[4 * k + 3];
+        const dx = v[3 * i] - v[3 * j], dy = v[3 * i + 1] - v[3 * j + 1], dz = v[3 * i + 2] - v[3 * j + 2];
+        out[3 * i] += w * dx; out[3 * i + 1] += w * dy; out[3 * i + 2] += w * dz;
+        out[3 * j] -= w * dx; out[3 * j + 1] -= w * dy; out[3 * j + 2] -= w * dz;
+      }
+    };
+    applyA(pos, Aq);
+    let rz = 0;
+    for (let i = 0; i < N; i++) { r[i] = b[i] - Aq[i]; z[i] = r[i] / diag[(i / 3) | 0]; q[i] = z[i]; rz += r[i] * z[i]; }
+    for (let it = 0; it < 40 && rz > 1e-12; it++) {
+      applyA(q, Aq);
+      let qAq = 0;
+      for (let i = 0; i < N; i++) qAq += q[i] * Aq[i];
+      if (qAq <= 0) break;
+      const alpha = rz / qAq;
+      let rzNew = 0;
+      for (let i = 0; i < N; i++) { pos[i] += alpha * q[i]; r[i] -= alpha * Aq[i]; z[i] = r[i] / diag[(i / 3) | 0]; rzNew += r[i] * z[i]; }
+      const beta = rzNew / rz;
+      rz = rzNew;
+      for (let i = 0; i < N; i++) q[i] = z[i] + beta * q[i];
+    }
+    this.collide();
+  }
+
+  /** The previous solver: Gauss-Seidel projection of one constraint at a time. Kept for comparison. */
+  relaxGaussSeidel(iters) {
     const pos = this.pos;
     const c = this.c;
     const nc = c.length / 4;
@@ -400,6 +598,18 @@ export class Relaxer {
    * the stitch graph must stay at least most of a stitch width apart in space.
    */
   collide() {
+    const pos = this.pos;
+    const minD = 1.0 * this.w;
+    this.forEachCollision((i, j, d) => {
+      const ex = pos[3 * j] - pos[3 * i], ey = pos[3 * j + 1] - pos[3 * i + 1], ez = pos[3 * j + 2] - pos[3 * i + 2];
+      const push = (minD - d) / d * 0.4;
+      pos[3 * i] -= ex * push; pos[3 * i + 1] -= ey * push; pos[3 * i + 2] -= ez * push;
+      pos[3 * j] += ex * push; pos[3 * j + 1] += ey * push; pos[3 * j + 2] += ez * push;
+    });
+  }
+
+  /** Call cb(i, j, distance) for every pair of loops closer than a stitch width that are not fabric neighbours. */
+  forEachCollision(cb) {
     const pos = this.pos, n = this.n;
     const cell = this.w;
     const minD = 1.0 * this.w;
@@ -461,10 +671,7 @@ export class Relaxer {
           const ex = pos[3 * j] - pos[3 * i], ey = pos[3 * j + 1] - pos[3 * i + 1], ez = pos[3 * j + 2] - pos[3 * i + 2];
           const d2 = ex * ex + ey * ey + ez * ez;
           if (d2 >= minD2 || d2 < 1e-12) continue;
-          const d = Math.sqrt(d2);
-          const push = (minD - d) / d * 0.4;
-          pos[3 * i] -= ex * push; pos[3 * i + 1] -= ey * push; pos[3 * i + 2] -= ez * push;
-          pos[3 * j] += ex * push; pos[3 * j + 1] += ey * push; pos[3 * j + 2] += ez * push;
+          cb(i, j, Math.sqrt(d2));
         }
       }
     }
@@ -649,7 +856,7 @@ export class Relaxer {
 /** Convenience: relax a knit result fully and return positions. */
 export function relaxKnit(knit, opts) {
   const r = new Relaxer(knit, opts);
-  const iters = opts.iterations || Math.min(500, 100 + Math.round(Math.sqrt(knit.nodes.length) * 5));
+  const iters = opts.iterations || Math.min(120, 30 + Math.round(Math.sqrt(knit.nodes.length)));
   r.relax(iters);
   return r.finish();
 }
