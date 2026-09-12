@@ -478,7 +478,7 @@ function rebuildScene() {
   if (!view || view.nodes.length === 0) return;
   const w = 100 / state.sts, h = 100 / state.rows;
   // Tension: at a fixed gauge, tighter knitting means the yarn fills more of each stitch.
-  const yarnRadius = w * ({ loose: 0.16, normal: 0.19, tight: 0.22 }[state.tension] || 0.19);
+  const yarnRadius = w * ({ loose: 0.18, normal: 0.21, tight: 0.24 }[state.tension] || 0.21);
 
   // Relax positions (warm start from the previous layout so knitting along feels stable,
   // but only if the pattern and settings are unchanged so node ids still mean the same thing).

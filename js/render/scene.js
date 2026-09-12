@@ -87,6 +87,8 @@ export class KnitScene {
     const g = buildYarnMesh(path, opts);
     this.yarnMaterial = g.userData.yarnMaterial;
     this.yarnMaterial.uniforms.viewportHeight.value = this.renderer.getSize(new THREE.Vector2()).y * this.renderer.getPixelRatio();
+    const gl = this.renderer.getContext();
+    this.yarnMaterial.uniforms.aaRim.value = gl.getParameter(gl.SAMPLES) > 0 ? 1 : 0;
     this.yarnGroup.add(g);
     this.needsRender = true;
   }

@@ -14,6 +14,7 @@ in vec3 ca;      // colour at start (linear)
 in vec3 cb;      // colour at end
 in vec2 sab;     // arc length along the strand at start / end
 in vec3 na;      // reference normal at the start (parallel transported), for the ply phase
+in vec3 nb;      // reference normal at the end
 in vec3 da;      // bisector plane normal at the start (average direction with the previous segment)
 in vec3 db;      // bisector plane normal at the end
 
@@ -26,6 +27,7 @@ flat out vec3 fCa;
 flat out vec3 fCb;
 flat out vec2 fS;
 flat out vec3 fN;
+flat out vec3 fNb;
 flat out vec3 fDa;
 flat out vec3 fDb;
 
@@ -39,17 +41,24 @@ void main() {
   vec3 toCam = cameraPosition - mid;
   float dist = length(toCam);
   vec3 tc = toCam / max(dist, 1e-6);
+  // Billboard axes in the screen plane: u across the segment, v along its projection.
   vec3 u = cross(dn, tc);
   float ul = length(u);
-  if (ul < 1e-4) { u = cross(dn, abs(dn.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)); ul = length(u); }
+  if (ul < 1e-4) { u = cross(tc, abs(tc.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)); ul = length(u); }
   u /= ul;
-  // A quad through the axis, pushed toward the camera by one radius so it
-  // covers the near surface, and inflated to cover the perspective silhouette.
-  float R = radius * (1.6 + 2.0 * radius / max(dist, radius));
-  vec3 p = mid + dn * (position.x * (0.5 * len + R)) + u * (position.y * R) + tc * radius;
+  vec3 v = normalize(cross(tc, u));
+  float along = abs(dot(dn, tc));           // how much the segment points at the camera
+  float halfProj = 0.5 * len * sqrt(max(0.0, 1.0 - along * along));
+  // Margin for the mitred ends and the perspective silhouette.
+  float R = radius * (1.7 + 2.0 * radius / max(dist, radius));
+  // Place the quad at the depth of the nearest point of the cylinder, so that its
+  // projection covers everything behind it.
+  vec3 centre = mid + tc * (radius * 1.1 + 0.5 * len * along);
+  vec3 p = centre + v * (position.x * (halfProj + R)) + u * (position.y * R);
   vWorld = p;
   fA = a; fB = b; fCa = ca; fCb = cb; fS = sab;
   fN = normalize(mat3(modelMatrix) * na);
+  fNb = normalize(mat3(modelMatrix) * nb);
   fDa = normalize(mat3(modelMatrix) * da);
   fDb = normalize(mat3(modelMatrix) * db);
   gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0);
@@ -66,12 +75,14 @@ flat in vec3 fCa;
 flat in vec3 fCb;
 flat in vec2 fS;
 flat in vec3 fN;
+flat in vec3 fNb;
 flat in vec3 fDa;
 flat in vec3 fDb;
 
 uniform mat4 projectionMatrix; // same program uniform as the vertex stage
 uniform float radius;
 uniform float viewportHeight;
+uniform float aaRim;      // 1 when the framebuffer is multisampled (alpha-to-coverage works), else 0
 uniform float plies;
 uniform float plyAmount;
 uniform float plyPitch;
@@ -86,7 +97,17 @@ vec3 toSRGB(vec3 c) {
   return mix(12.92 * c, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c));
 }
 
-float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+// Hash and value noise that stay well behaved for large coordinates.
+float hash21(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+float vnoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash21(i), hash21(i + vec2(1.0, 0.0)), f.x), mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), f.x), f.y);
+}
 
 void main() {
   vec3 ro = cameraPosition;
@@ -95,49 +116,87 @@ void main() {
   float len = length(ba);
   vec3 dn = ba / max(len, 1e-6);
   vec3 oa = ro - fA;
-  // Closest approach between the view ray and the (infinite) axis line.
+  // Closest approach between the view ray and the segment (clamped), for the
+  // anti-aliased silhouette and the behind-camera test.
   float B = dot(rd, dn);
   float D = dot(rd, oa);
   float E = dot(dn, oa);
   float denom = 1.0 - B * B;
-  float s = denom > 1e-8 ? (E - D * B) / denom : 0.0;   // along the axis, world units
-  float t = s * B - D;                                   // along the ray
-  vec3 axisPt = fA + s * dn;
-  vec3 q = ro + t * rd;
+  float sc = denom > 1e-8 ? clamp((E - D * B) / denom, 0.0, len) : 0.0;
+  float tc = sc * B - D;
+  vec3 axisPt = fA + sc * dn;
+  vec3 q = ro + tc * rd;
   float dist = length(q - axisPt);
-  // Pixel size at this depth, for an anti-aliased silhouette.
-  float px = 2.0 * max(t, 1e-3) / (projectionMatrix[1][1] * viewportHeight);
-  float edge = radius + px;
-  if (dist > edge || t <= 0.0) discard;
-  float alpha = 1.0 - smoothstep(radius - px, edge, dist);
+  float px = aaRim * 2.0 * max(tc, 1e-3) / (projectionMatrix[1][1] * viewportHeight);
+  if (dist > radius || tc <= 0.0) discard;
+  // Anti-aliased silhouette: fade out over the last pixel inside the true edge.
+  float alpha = 1.0 - smoothstep(radius - px, radius, dist);
 
+  // Capsule intersection: cylinder body, else a sphere at the nearer end. Capsules
+  // overlap at the joints, so the union has no gaps however short the segments are.
   vec3 p;
   vec3 n;
-  if (dist < radius) {
-    // Hit on the cylinder: pull the closest-approach point back along the ray.
-    float sinA = sqrt(max(denom, 1e-6));
-    float back = sqrt(max(radius * radius - dist * dist, 0.0)) / sinA;
-    p = q - rd * back;
+  float h;
+  if (dist < radius - 1e-5) {
+    float t = -1.0;
+    if (denom > 1e-6) {
+      vec3 dd = rd - dn * B;
+      vec3 oo = oa - dn * E;
+      float a = dot(dd, dd), b = dot(dd, oo), c = dot(oo, oo) - radius * radius;
+      float disc = b * b - a * c;
+      if (disc >= 0.0) {
+        float tb = (-b - sqrt(disc)) / a;
+        float y = E + tb * B;
+        if (tb > 0.0 && y >= 0.0 && y <= len) t = tb;
+      }
+    }
+    if (t < 0.0) {
+      // Sphere at whichever end the ray passes.
+      vec3 centre = (E + tc * B) < 0.5 * len ? fA : fB;
+      vec3 oc = ro - centre;
+      float b = dot(rd, oc), c = dot(oc, oc) - radius * radius;
+      float disc = b * b - c;
+      if (disc < 0.0) discard;
+      t = -b - sqrt(disc);
+      if (t < 0.0) discard;
+    }
+    p = ro + t * rd;
+    h = dot(p - fA, dn) / max(len, 1e-6);
   } else {
     p = q; // grazing silhouette, for the anti-aliasing rim
+    h = sc / max(len, 1e-6);
   }
-  // Mitred joins: keep only the part of this cylinder between the bisector planes it
-  // shares with its neighbours; they render the rest.
-  if (dot(p - fA, fDa) < 0.0 || dot(p - fB, fDb) > 0.0) discard;
-  float h = dot(p - fA, dn) / max(len, 1e-6);
-  n = normalize(p - (fA + h * dn * len));
-  s = clamp(h, 0.0, 1.0);
+  float s = clamp(h, 0.0, 1.0);
+  // Smooth shading across joints: the normal is taken about the axis direction
+  // interpolated between the bisectors at the two ends, so it turns continuously along
+  // the curve, and the spherical ends shade like the neighbouring cylinder.
+  vec3 dMix = mix(fDa, fDb, s);
+  vec3 dSmooth = length(dMix) > 1e-4 ? normalize(dMix) : dn;
+  vec3 q0 = p - (fA + s * ba);
+  vec3 nProj = q0 - dSmooth * dot(q0, dSmooth);
+  float nl = length(nProj);
+  // On a spherical end seen along the axis the projection degenerates; blend back to
+  // the true normal there instead of dividing by zero.
+  vec3 nTrue = normalize(q0);
+  n = normalize(mix(nTrue, nProj / max(nl, 1e-6), smoothstep(0.0, 0.5 * radius, nl)));
+  vec3 fMix = mix(fN, fNb, s);
+  vec3 frameN = fMix - dSmooth * dot(fMix, dSmooth);
+  if (length(frameN) < 1e-4) frameN = cross(dSmooth, abs(dSmooth.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0));
+  frameN = normalize(frameN);
 
-  // Ply twist: a helical bump in the normal and a shallow groove in the albedo.
-  vec3 nb = normalize(cross(dn, fN));
-  float theta = atan(dot(n, nb), dot(n, fN));
+  vec3 frameB = normalize(cross(dSmooth, frameN));
+  float theta = atan(dot(n, frameB), dot(n, frameN));
   float arc = mix(fS.x, fS.y, s);
   float phase = plies * theta - 6.2831853 * arc / plyPitch;
-  vec3 tangential = normalize(cross(dn, n));
-  n = normalize(n + plyAmount * plies * sin(phase) * tangential - plyAmount * 0.6 * sin(phase) * dn);
+  vec3 tangential = normalize(cross(dSmooth, n));
+  n = normalize(n + plyAmount * plies * sin(phase) * tangential - plyAmount * 0.6 * sin(phase) * dSmooth);
   float groove = 1.0 - 0.14 * (0.5 + 0.5 * cos(phase));
-  // A little fibre noise so the surface is not perfectly smooth.
-  float fibre = 0.94 + 0.12 * hash(vec2(floor(arc * 40.0), floor(theta * 6.0)));
+  // Fibre texture: soft streaks running along the plies (wrapped so precision holds
+  // for long strands).
+  float wa = mod(arc, 512.0);
+  float alongPly = wa * 1.2;
+  float acrossPly = (theta * plies / 6.2831853 - wa / plyPitch) * 5.0;
+  float fibre = 0.92 + 0.10 * vnoise(vec2(alongPly, acrossPly)) + 0.06 * vnoise(vec2(alongPly * 2.7, acrossPly * 2.1));
 
   vec3 albedo = mix(fCa, fCb, s) * groove * fibre;
   vec3 col = albedo * mix(hemiGround, hemiSky, 0.5 + 0.5 * n.y);
@@ -201,6 +260,7 @@ export function buildCapsuleMesh(strands, opts) {
   const ca = new Float32Array(total * 3), cb = new Float32Array(total * 3);
   const sab = new Float32Array(total * 2), na = new Float32Array(total * 3);
   const da = new Float32Array(total * 3), db = new Float32Array(total * 3);
+  const nbArr = new Float32Array(total * 3);
   let k = 0;
   const box = new THREE.Box3();
   for (const s of strands) {
@@ -230,6 +290,7 @@ export function buildCapsuleMesh(strands, opts) {
         pa[3 * k + c] = pts[3 * i + c]; pb[3 * k + c] = pts[3 * i + 3 + c];
         ca[3 * k + c] = cols[3 * i + c]; cb[3 * k + c] = cols[3 * i + 3 + c];
         na[3 * k + c] = normals[3 * i + c];
+        nbArr[3 * k + c] = normals[3 * i + 3 + c];
         da[3 * k + c] = ba[c]; db[3 * k + c] = bb[c];
       }
       sab[2 * k] = arc; sab[2 * k + 1] = arc + len;
@@ -249,6 +310,7 @@ export function buildCapsuleMesh(strands, opts) {
   geo.setAttribute('cb', new THREE.InstancedBufferAttribute(cb, 3));
   geo.setAttribute('sab', new THREE.InstancedBufferAttribute(sab, 2));
   geo.setAttribute('na', new THREE.InstancedBufferAttribute(na, 3));
+  geo.setAttribute('nb', new THREE.InstancedBufferAttribute(nbArr, 3));
   geo.setAttribute('da', new THREE.InstancedBufferAttribute(da, 3));
   geo.setAttribute('db', new THREE.InstancedBufferAttribute(db, 3));
   geo.instanceCount = total;
@@ -263,6 +325,7 @@ export function buildCapsuleMesh(strands, opts) {
     uniforms: {
       radius: { value: opts.radius },
       viewportHeight: { value: 900 },
+      aaRim: { value: 1 },
       plies: { value: opts.plies ?? 3 },
       plyAmount: { value: opts.plyAmount ?? 0.10 },
       plyPitch: { value: opts.plyPitch ?? opts.radius * 7 },
