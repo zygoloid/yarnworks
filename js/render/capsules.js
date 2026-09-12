@@ -86,6 +86,7 @@ uniform float aaRim;      // 1 when the framebuffer is multisampled (alpha-to-co
 uniform float plies;
 uniform float plyAmount;
 uniform float plyPitch;
+uniform float fibreBump;
 uniform vec3 hemiSky;
 uniform vec3 hemiGround;
 uniform vec3 lightDir[4];
@@ -187,18 +188,27 @@ void main() {
   vec3 frameB = normalize(cross(dSmooth, frameN));
   float theta = atan(dot(n, frameB), dot(n, frameN));
   float arc = mix(fS.x, fS.y, s);
-  float phase = plies * theta - 6.2831853 * arc / plyPitch;
   vec3 tangential = normalize(cross(dSmooth, n));
-  n = normalize(n + plyAmount * plies * sin(phase) * tangential - plyAmount * 0.6 * sin(phase) * dSmooth);
-  float groove = 1.0 - 0.14 * (0.5 + 0.5 * cos(phase));
-  // Fibre texture: soft streaks running along the plies (wrapped so precision holds
-  // for long strands).
+  // Plies: several rounded strands twisted around the yarn axis. Within each ply the
+  // normal tilts linearly (a round strand); between plies there is a sharp crevice.
+  float phase = plies * theta - 6.2831853 * arc / plyPitch;
+  float u = fract(phase / 6.2831853);              // 0..1 across one ply, crest at 0.5
+  float crevice = 1.0 - smoothstep(0.0, 0.22, min(u, 1.0 - u));   // 1 in the crevice
+  float tilt = (u - 0.5) * 2.0;
+  n = normalize(n + plyAmount * tilt * tangential - plyAmount * 0.35 * tilt * dSmooth);
+  // Detail fades out as the yarn gets small on screen, to avoid shimmering.
+  float detail = 1.0 - smoothstep(0.08, 0.35, px / radius);
+  // Fibres: fine streaks along each ply, bump-mapped from anisotropic noise.
   float wa = mod(arc, 512.0);
-  float alongPly = wa * 1.2;
-  float acrossPly = (theta * plies / 6.2831853 - wa / plyPitch) * 5.0;
-  float fibre = 0.92 + 0.10 * vnoise(vec2(alongPly, acrossPly)) + 0.06 * vnoise(vec2(alongPly * 2.7, acrossPly * 2.1));
+  float alongPly = wa * 0.7;
+  float acrossPly = (theta * plies / 6.2831853 - wa / plyPitch) * 28.0;
+  float f0 = vnoise(vec2(alongPly, acrossPly)) * 0.6 + vnoise(vec2(alongPly * 2.1, acrossPly * 2.3)) * 0.4;
+  float f1 = vnoise(vec2(alongPly, acrossPly + 0.4)) * 0.6 + vnoise(vec2(alongPly * 2.1, (acrossPly + 0.4) * 2.3)) * 0.4;
+  float f2 = vnoise(vec2(alongPly + 0.4, acrossPly)) * 0.6 + vnoise(vec2((alongPly + 0.4) * 2.1, acrossPly * 2.3)) * 0.4;
+  n = normalize(n + detail * fibreBump * ((f1 - f0) * tangential + 0.3 * (f2 - f0) * dSmooth));
+  float shade = (1.0 - 0.6 * crevice) * (0.82 + 0.36 * mix(0.5, f0, detail));
 
-  vec3 albedo = mix(fCa, fCb, s) * groove * fibre;
+  vec3 albedo = mix(fCa, fCb, s) * shade;
   vec3 col = albedo * mix(hemiGround, hemiSky, 0.5 + 0.5 * n.y);
   vec3 spec = vec3(0.0);
   for (int i = 0; i < 4; i++) {
@@ -206,7 +216,7 @@ void main() {
     float nl = max(dot(n, l), 0.0);
     col += albedo * lightColor[i] * nl;
     vec3 hv = normalize(l - rd);
-    spec += lightColor[i] * 0.04 * pow(max(dot(n, hv), 0.0), 24.0) * nl;
+    spec += lightColor[i] * 0.08 * pow(max(dot(n, hv), 0.0), 12.0) * nl;
   }
   col += spec;
 
@@ -327,8 +337,9 @@ export function buildCapsuleMesh(strands, opts) {
       viewportHeight: { value: 900 },
       aaRim: { value: 1 },
       plies: { value: opts.plies ?? 3 },
-      plyAmount: { value: opts.plyAmount ?? 0.10 },
-      plyPitch: { value: opts.plyPitch ?? opts.radius * 7 },
+      plyAmount: { value: opts.plyAmount ?? 0.45 },
+      plyPitch: { value: opts.plyPitch ?? opts.radius * 6 },
+      fibreBump: { value: opts.fibreBump ?? 0.6 },
       hemiSky: { value: new THREE.Color(0.62, 0.62, 0.62) },
       hemiGround: { value: new THREE.Color(0.30, 0.28, 0.27) },
       lightDir: { value: [new THREE.Vector3(100, 220, 180), new THREE.Vector3(-160, -60, 140), new THREE.Vector3(20, 80, -220), new THREE.Vector3(-40, -200, -60)] },
