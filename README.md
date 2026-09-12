@@ -132,7 +132,12 @@ rows. Finishing: `Sew the shoulder seams`, `Sew the sleeves into the
 armholes`, `Sew the side seams`. Seams need pieces called Back, Front and
 Sleeve(s); the sewn stitches are pulled together by the relaxation, the
 front and back facing each other and the sleeves set into the armholes the
-way round that keeps the right side out.
+way round that keeps the right side out. A neckband goes the way patterns
+write it: after the shoulder seams, `With RS facing and smaller needles,
+pick up and knit 56 sts evenly around the neck opening`, `Join in the
+round`, rib for a few rounds, `Bind off loosely in rib`. The stitches are
+picked up down one side of the front neck, across its bound-off centre,
+up the other side and across the back neck.
 
 ## Development
 

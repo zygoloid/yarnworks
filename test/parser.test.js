@@ -200,8 +200,9 @@ Work each side separately.
 With WS facing, rejoin yarn to the remaining sts.
 Sew the shoulder seams.
 Set in the sleeves.
-Sew the side and sleeve seams.`);
+Sew the side and sleeve seams.
+With RS facing and smaller needles, beginning at the left shoulder seam, pick up and knit 70 (74) sts evenly around the neck opening.`);
   assert.deepEqual(p.errors, []);
-  const types = p.statements.map((s) => s.type + (s.name ? ':' + s.name : '') + (s.make > 1 ? ' x' + s.make : '') + (s.what ? ':' + s.what : '') + (s.side ? ':' + s.side : ''));
-  assert.deepEqual(types, ['section:Sleeves x2', 'needle:smaller', 'yarn:CC', 'castOn', 'needle:4 mm', 'needle:US 8', 'plainRows', 'edgeMarkers:armhole', 'eachSide', 'rejoin:ws', 'seam:shoulders', 'seam:sleeves', 'seam:sides']);
+  const types = p.statements.map((s) => s.type + (s.name ? ':' + s.name : '') + (s.make > 1 ? ' x' + s.make : '') + (s.what ? ':' + s.what : '') + (s.where ? ':' + s.where : '') + (s.side ? ':' + s.side : ''));
+  assert.deepEqual(types, ['section:Sleeves x2', 'needle:smaller', 'yarn:CC', 'castOn', 'needle:4 mm', 'needle:US 8', 'plainRows', 'edgeMarkers:armhole', 'eachSide', 'rejoin:ws', 'seam:shoulders', 'seam:sleeves', 'seam:sides', 'needle:smaller', 'pickupRow:neck']);
 });

@@ -58,7 +58,6 @@ export class Knitter {
     this.sectionStartCount = 0; // rowCount when the current section began
     // One side of a neck worked while the other waits.
     this.sideHold = null;
-    this.seamRequests = [];
     this.seams = [];
     this.rowDefs = new Map(); // label -> statement
     this.rowHistory = []; // executed row statements
@@ -202,7 +201,6 @@ export class Knitter {
 
   result() {
     if (this.piece && this.piece.endRow === null) this.piece.endRow = this.rows.length;
-    if (!this.stopAt && !this.stopped) this.buildSeams();
     if (this.nodes.length > 2 && !this.stopAt) {
       const topo = checkOrientable({ nodes: this.nodes, rows: this.rows, seams: this.seams });
       if (!topo.ok) {
@@ -272,7 +270,8 @@ export class Knitter {
       case 'edgeMarkers': return this.doEdgeMarkers(s);
       case 'eachSide': return this.doEachSide(s);
       case 'rejoin': return this.doRejoin(s);
-      case 'seam': this.seamRequests.push(s); return;
+      case 'seam': return this.buildSeams([s]);
+      case 'pickupRow': return this.doPickUpRow(s);
       case 'workFlat': return this.doWorkFlat(s);
       case 'resumeRound': return this.doResumeRound(s);
       case 'graft': return this.doGraft(s);
@@ -1346,13 +1345,13 @@ function pieceRole(name) {
   return null;
 }
 
-Knitter.prototype.buildSeams = function buildSeams() {
-  if (this.seamRequests.length === 0) return;
-  const col = this.columns();
+/**
+ * The edges of a finished piece: its outer selvedges row by row, the stitches bound off in
+ * whole bind-off rows, and its column range. `col` is from columns().
+ */
+Knitter.prototype.pieceGeometry = function pieceGeometry(piece, col) {
   const rows = this.rows, nodes = this.nodes;
-  const geo = new Map();
-  const geometry = (piece) => {
-    if (geo.has(piece.index)) return geo.get(piece.index);
+  {
     const pieceRows = [];
     for (let r = piece.startRow; r < piece.endRow; r++) if (rows[r].complete && !rows[r].castOn && rows[r].nodes.length) pieceRows.push(rows[r]);
     let min = Infinity, max = -Infinity;
@@ -1372,9 +1371,17 @@ Knitter.prototype.buildSeams = function buildSeams() {
     const boundOff = [];
     for (const row of pieceRows) if (row.bindOff) for (const id of row.nodes) if (nodes[id].op === 'bo') boundOff.push(id);
     const marker = piece.edgeMarkers.length ? piece.edgeMarkers[piece.edgeMarkers.length - 1].row : null;
-    const g = { piece, rows: pieceRows, min, max, mid, left, right, boundOff, marker };
-    geo.set(piece.index, g);
-    return g;
+    return { piece, rows: pieceRows, min, max, mid, left, right, boundOff, marker };
+  }
+};
+
+Knitter.prototype.buildSeams = function buildSeams(requests) {
+  const col = this.columns();
+  const rows = this.rows, nodes = this.nodes;
+  const geo = new Map();
+  const geometry = (piece) => {
+    if (!geo.has(piece.index)) geo.set(piece.index, this.pieceGeometry(piece, col));
+    return geo.get(piece.index);
   };
   const byRole = (role) => this.pieces.filter((p) => p.role === role);
   const need = (role, s, what) => {
@@ -1386,7 +1393,8 @@ Knitter.prototype.buildSeams = function buildSeams() {
   // Pick `count` evenly spaced entries from a list.
   const sample = (list, i, count) => list[Math.min(list.length - 1, Math.floor((i + 0.5) * list.length / count))];
 
-  for (const s of this.seamRequests) {
+  for (const s of requests) {
+    if (this.piece && this.piece.endRow === null && this.finished) this.piece.endRow = this.rows.length;
     try {
       if (s.what === 'shoulders') {
         const front = geometry(need('front', s, 'Sew the shoulder seams')[0]);
@@ -1445,6 +1453,84 @@ Knitter.prototype.buildSeams = function buildSeams() {
       if (e instanceof PatternError) this.message('error', e.message, e.loc); else throw e;
     }
   }
+};
+
+/**
+ * The loop of edge stitches around the neck opening of a front and back, starting at one
+ * shoulder: down one side of the front neck, across its bound-off centre, up the other
+ * side, then across the back neck. Each entry is {id, inward}, `inward` a stitch further
+ * into the fabric (for laying out the picked-up stitches).
+ */
+Knitter.prototype.neckPath = function neckPath(loc) {
+  const col = this.columns();
+  const nodes = this.nodes, rows = this.rows;
+  const front = this.pieces.find((p) => p.role === 'front'), back = this.pieces.find((p) => p.role === 'back');
+  if (!front || !back) throw new KnitError('Picking up around the neck needs pieces called "Front:" and "Back:"', loc);
+  for (const pc of [front, back]) if (pc.endRow === null) pc.endRow = this.rows.length;
+  const gf = this.pieceGeometry(front, col), gb = this.pieceGeometry(back, col);
+  const neckRow = gf.rows.find((r) => !r.bindOff && r.nodes.some((id) => nodes[id].op === 'bo'));
+  if (!neckRow) throw new KnitError('Picking up around the neck needs a front neck: bind off the centre stitches first', loc);
+  const neckBo = neckRow.nodes.filter((id) => nodes[id].op === 'bo').map((id) => ({ id, inward: nodes[id].parents[0] }));
+  // The two sides above the neck row, each contributing its neck-edge stitch per row.
+  const lo = [], hi = [];
+  for (const r of gf.rows) {
+    if (r.index <= neckRow.index || r.isRound) continue;
+    let min = r.nodes[0], max = r.nodes[0];
+    for (const id of r.nodes) { if (col[id] < col[min]) min = id; if (col[id] > col[max]) max = id; }
+    if (col[max] < gf.mid) lo.push({ id: max, inward: r.nodes[nodes[max].pos + (r.nodes[nodes[max].pos - 1] !== undefined && col[r.nodes[nodes[max].pos - 1]] < col[max] ? -1 : 1)] ?? nodes[max].parents[0], row: r.index });
+    else if (col[min] > gf.mid) hi.push({ id: min, inward: r.nodes[nodes[min].pos + (r.nodes[nodes[min].pos + 1] !== undefined && col[r.nodes[nodes[min].pos + 1]] > col[min] ? 1 : -1)] ?? nodes[min].parents[0], row: r.index });
+  }
+  lo.sort((a, b) => b.row - a.row); // top of the shoulder down to the neck row
+  hi.sort((a, b) => a.row - b.row); // neck row up to the shoulder
+  if (neckBo.length > 1 && col[neckBo[0].id] > col[neckBo[neckBo.length - 1].id]) neckBo.reverse();
+  const frontPath = lo.concat(neckBo, hi);
+  let spanMin = Infinity, spanMax = -Infinity;
+  for (const e of frontPath) { spanMin = Math.min(spanMin, col[e.id]); spanMax = Math.max(spanMax, col[e.id]); }
+  // The back neck: the back's bound-off stitches facing the front neck (the shoulder seams
+  // take the rest), from the second shoulder round to the first.
+  const mirrored = (id) => gf.min + (gb.max - col[id]);
+  const backNeck = gb.boundOff.filter((id) => mirrored(id) >= spanMin - 0.5 && mirrored(id) <= spanMax + 0.5)
+    .map((id) => ({ id, inward: nodes[id].parents[0] }))
+    .sort((a, b) => mirrored(b.id) - mirrored(a.id));
+  const path = frontPath.concat(backNeck).filter((e) => e.inward !== undefined && e.inward !== null);
+  if (path.length < 4) throw new KnitError('Could not find the neck opening to pick up around', loc);
+  return path;
+};
+
+/** "Pick up and knit N sts evenly around the neck opening", as the start of a neckband. */
+Knitter.prototype.doPickUpRow = function doPickUpRow(s) {
+  if (this.currentRow) this.finishRow(false);
+  if (this.castOn && !this.finished && (this.loopsOn(this.left) || this.loopsOn(this.right))) throw new KnitError('Finish (bind off) the piece in hand before picking up around the neck', s.loc);
+  const n = this.num(s.count, s.loc);
+  const path = this.neckPath(s.loc);
+  this.startPiece(s);
+  this.piece.attached = true;
+  this.side = 'rs';
+  const row = this.startRow('Pick up', s.loc, false, true);
+  row.pickUp = true;
+  row.closed = true;
+  const mark = this.nodes.length, yarn = this.yarnLength;
+  const build = (P) => {
+    for (let i = 0; i < n; i++) {
+      const c = P[Math.min(P.length - 1, Math.floor((i + 0.5) * P.length / n))];
+      const node = this.newNode({ kind: 'k', op: 'pick up', face: this.faceFor('k'), parents: [c.id], loc: s.loc });
+      node.pickedUp = { edge: c.id, inward: c.inward };
+      this.put(node);
+    }
+  };
+  build(path);
+  // Going round the opening the other way would put the band's right side inward.
+  const topo = checkOrientable({ nodes: this.nodes, rows: this.rows, seams: this.seams });
+  if (topo.ok && topo.flipped && topo.flipped.row === row.index) {
+    for (const c of path) this.nodes[c.id].children = this.nodes[c.id].children.filter((k) => k < mark);
+    this.nodes.length = mark;
+    row.nodes = []; this.right = []; this.yarnLength = yarn;
+    build(path.slice().reverse());
+  }
+  if (Math.abs(path.length - n) > Math.max(4, path.length * 0.3)) {
+    this.message('warning', `Picking up ${n} sts around a neck opening with ${path.length} edge stitches`, s.loc);
+  }
+  this.finishRow(false);
 };
 
 /**

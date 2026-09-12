@@ -198,7 +198,9 @@ export class Parser {
       const r = this.tryResumeRound(cur);
       if (r) return r;
     }
-    if (w === 'rejoin' || w === 'return' || (w === 'with' && cur.isWord(['rs', 'ws'], 1) && cur.isWord('facing', 2))) return this.parseRejoin(cur, null);
+    if (w === 'with' && cur.isWord(['rs', 'ws'], 1) && cur.isWord('facing', 2)) return this.parseFacing(cur);
+    if (w === 'rejoin' || w === 'return') return this.parseRejoin(cur, null);
+    if ((w === 'pick' && cur.isWord('up', 1)) || w === 'pu' || w === 'puk' || ((w === 'beginning' || w === 'starting' || w === 'begin' || w === 'start') && this.lineHasWords(cur, ['pick', 'pu', 'puk']))) return this.parsePickUpStatement(cur, []);
     if ((w === 'work' || w === 'working') && this.lineHasWords(cur, ['each', 'side']) && this.lineHasWords(cur, ['separately'])) {
       while (!cur.atEnd()) cur.next();
       return { type: 'eachSide', loc: cur.loc(first) };
@@ -338,6 +340,49 @@ export class Parser {
     cur.acceptWord(['size', 'sized']);
     if (!cur.acceptWord(['needles', 'needle', 'ndls', 'dpns', 'dpn'])) { cur.i = save; return null; }
     return name;
+  }
+
+  /**
+   * "With RS facing, ...": what follows is either a rejoin ("rejoin yarn to the remaining
+   * sts") or a pick up ("and smaller needles, beginning at the left shoulder seam, pick up
+   * and knit 70 sts evenly around the neck opening").
+   */
+  parseFacing(cur) {
+    cur.next(); // with
+    const side = cur.next().value;
+    cur.acceptWord('facing');
+    const extra = [];
+    while (cur.acceptWord('and') || cur.acceptPunct(',')) {
+      cur.acceptWord(['the', 'a']);
+      const needle = this.tryNeedle(cur);
+      if (needle) { extra.push({ type: 'needle', name: needle, loc: cur.loc(cur.peek()) }); continue; }
+      if (cur.isWord(['yarn', 'color', 'colour']) || (cur.peek().type === 'word' && /^[A-Z]{1,2}$/.test(cur.peek().text) && !cur.isWord(['k', 'p']))) {
+        cur.acceptWord(['yarn', 'color', 'colour']);
+        extra.push({ type: 'yarn', name: cur.next().text.toUpperCase(), loc: cur.loc(cur.peek()) });
+        cur.acceptWord(['yarn', 'color', 'colour']);
+        continue;
+      }
+      break;
+    }
+    if (this.lineHasWords(cur, ['pick', 'pu', 'puk'])) return this.parsePickUpStatement(cur, extra);
+    const r = this.parseRejoin(cur, side);
+    return extra.length ? [...extra, r] : r;
+  }
+
+  /** "[beginning at the left shoulder seam,] pick up and knit 70 sts evenly around the neck opening". */
+  parsePickUpStatement(cur, extra) {
+    const first = cur.peek();
+    const words = [];
+    for (let j = 0; cur.peek(j).type !== 'eol'; j++) if (cur.peek(j).type === 'word') words.push(cur.peek(j).value);
+    while (!cur.atEnd() && !cur.isWord(['pick', 'pu', 'puk'])) cur.next();
+    const item = this.tryPickUp(cur);
+    if (!item) throw cur.error('Expected "pick up and knit N sts"');
+    while (!cur.atEnd()) cur.next();
+    let where = null;
+    if (words.some((x) => ['neck', 'neckline', 'neckband', 'neckhole'].includes(x))) where = 'neck';
+    if (where === null) throw new PatternError('I can pick up "around the neck opening" on its own line; to pick up along a flap edge, put the pick up inside a row (e.g. "Next rnd: pick up and knit 14 sts along the edge of the heel flap, ...")', cur.loc(first, cur.toks[cur.toks.length - 1]));
+    const stmt = { type: 'pickupRow', count: item.count, where, loc: cur.loc(first) };
+    return extra.length ? [...extra, stmt] : stmt;
   }
 
   /** "Rejoin yarn to the remaining sts", "With RS facing, rejoin yarn at the neck edge", "Return to the held sts". */

@@ -174,6 +174,14 @@ Bind off.
 
 Finishing:
 Sew the shoulder seams.
+
+Neckband:
+With RS facing and smaller needles, beginning at the left shoulder seam, pick up and knit 56 (62, 68) sts evenly around the neck opening.
+Join in the round.
+Rnd 1: *k1, p1; rep from * to end.
+Repeat rnd 1 until neckband measures 3 cm.
+Bind off loosely in rib.
+
 Sew the sleeves into the armholes.
 Sew the side seams.`,
   },

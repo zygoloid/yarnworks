@@ -105,7 +105,9 @@ export class Relaxer {
   /** In-plane length of a wale link; the fold runs along the course (garter ridges). */
   walePlane(i, p) {
     const d = this.pull[i] - this.pull[p];
-    if (d === 0) return this.h * this.scaleAt(i, p);
+    // A cast-on loop or a bound-off chain adds about half a row, not a whole one.
+    const edge = this.nodes[i].kind === 'co' || this.nodes[p].kind === 'co' || this.nodes[i].op === 'bo' || this.nodes[p].op === 'bo' ? 0.6 : 1;
+    if (d === 0) return this.h * edge * this.scaleAt(i, p);
     const a = this.nodes[i], b = this.nodes[p];
     const ra = this.knit.rows[a.row], rb = this.knit.rows[b.row];
     let same = 0, total = 0;
@@ -121,7 +123,7 @@ export class Relaxer {
     check(ra.nodes[a.pos + 1], rb.nodes[b.pos + (sameDir ? 1 : -1)]);
     check(ra.nodes[a.pos - 1], rb.nodes[b.pos - (sameDir ? 1 : -1)]);
     const consistency = total ? same / total : 0.5;
-    return this.h * this.scaleAt(i, p) * (1 - (1 - this.pullWale) * consistency);
+    return this.h * edge * this.scaleAt(i, p) * (1 - (1 - this.pullWale) * consistency);
   }
 
   get(i) { return [this.pos[3 * i], this.pos[3 * i + 1], this.pos[3 * i + 2]]; }
@@ -235,7 +237,7 @@ export class Relaxer {
     let sleeves = 0, others = 0;
     for (const pc of this.pieces) {
       const k = pc.index;
-      if (!fresh[k]) continue;
+      if (!fresh[k] || pc.attached) continue;
       const b = boxes[k];
       const cx = (b.min[0] + b.max[0]) / 2, cz = (b.min[2] + b.max[2]) / 2;
       if (pc.role === 'front' || pc.role === 'back') {
@@ -314,6 +316,26 @@ export class Relaxer {
     if (prev && prev.nodes.length >= 3) {
       const c = centre(prev);
       let nx = 0, ny = 0, nz = 0;
+      if (prev.pickUp && prev.closed) {
+        // A band picked up around an opening grows out of the opening: along the ring's
+        // normal, away from the rest of the work.
+        const ids = prev.nodes;
+        for (let k = 0; k < ids.length; k++) {
+          const a = this.get(ids[k]), b = this.get(ids[(k + 1) % ids.length]);
+          const ax = a[0] - c[0], ay = a[1] - c[1], az = a[2] - c[2];
+          const bx = b[0] - c[0], by = b[1] - c[1], bz = b[2] - c[2];
+          nx += ay * bz - az * by; ny += az * bx - ax * bz; nz += ax * by - ay * bx;
+        }
+        const nl = Math.hypot(nx, ny, nz) || 1;
+        let gx = 0, gy = 0, gz = 0, gn = 0;
+        for (let i = 0; i < prev.nodes[0]; i++) { gx += this.pos[3 * i]; gy += this.pos[3 * i + 1]; gz += this.pos[3 * i + 2]; gn++; }
+        if (gn) { gx /= gn; gy /= gn; gz /= gn; }
+        const away = (c[0] - gx) * nx + (c[1] - gy) * ny + (c[2] - gz) * nz;
+        const sgn = away < 0 ? -1 : 1;
+        dir = [sgn * nx / nl, sgn * ny / nl, sgn * nz / nl];
+        this.growth.set(row.index, dir);
+        return dir;
+      }
       if (prev.isRound) {
         const ids = prev.nodes;
         for (let k = 0; k < ids.length; k++) {

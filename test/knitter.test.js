@@ -340,11 +340,25 @@ Knit 2 rounds.
 Bind off.
 Finishing:
 Sew the shoulder seams.
+Neckband:
+With RS facing and smaller needles, pick up and knit 20 sts evenly around the neck opening.
+Join in the round.
+Rnds 1-2: *k1, p1; rep from * to end.
+Bind off in rib.
 Sew the sleeves into the armholes.
 Sew the side seams.`, { rowHeight: 4 });
   assert.deepEqual(errors(r), []);
   assert.equal(r.finished, true);
-  assert.deepEqual(r.pieces.map((p) => [p.name, p.role, p.inRound]), [['Back', 'back', false], ['Front', 'front', false], ['Sleeve 1', 'sleeve', true], ['Sleeve 2', 'sleeve', true]]);
+  assert.deepEqual(r.pieces.map((p) => [p.name, p.role, p.inRound]), [['Back', 'back', false], ['Front', 'front', false], ['Sleeve 1', 'sleeve', true], ['Sleeve 2', 'sleeve', true], ['Neckband', null, true]]);
+  // The neckband is picked up around the opening (the front neck's 6 bound off + 2 rows of
+  // edge each side + the back neck) and stays attached to the body.
+  const band = r.pieces[4];
+  assert.equal(band.attached, true);
+  const pick = r.rows[band.startRow];
+  assert.equal(pick.pickUp, true);
+  assert.equal(pick.nodes.length, 20);
+  assert.ok(pick.nodes.every((id) => r.nodes[id].pickedUp && r.nodes[r.nodes[id].parents[0]].piece <= 1), 'picked up from the front and back');
+  assert.equal(r.nodes[pick.nodes[0]].needle, 'smaller');
   // Every stitch knows its piece and needle.
   assert.equal(r.nodes[r.pieces[1].startNode].piece, 1);
   assert.equal(r.nodes[r.pieces[0].startNode].needle, 'smaller');
@@ -358,6 +372,7 @@ Sew the side seams.`, { rowHeight: 4 });
   const kinds = {};
   for (const s of r.seams) (kinds[s.kind] = kinds[s.kind] || []).push(s.pairs.length);
   assert.deepEqual(kinds, { shoulder: [12], sleeve: [18, 18], side: [13, 13] });
+  assert.ok(r.seams.findIndex((s) => s.kind === 'sleeve') > r.seams.findIndex((s) => s.kind === 'shoulder'), 'seams are made in pattern order');
   // The sewn garment has a consistent right side, and the sleeves would not if set in the other way round.
   const topo = checkOrientable(r);
   assert.equal(topo.ok, true);

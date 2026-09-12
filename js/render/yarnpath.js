@@ -149,7 +149,9 @@ export class YarnPathBuilder {
         const nAvg = norm(add(pf.N, N));
         const zsum = (sPrev + s) / 2;
         const kindA = this.nodes[prevId].kind, kindB = node.kind;
-        const level = (kindA === 'sl' || kindB === 'sl') ? -0.5 : -0.8;
+        // Between two cast-on loops the strand runs straight along the edge.
+        const edgePair = (kindA === 'co' && kindB === 'co') || (this.nodes[prevId].op === 'bo' && node.op === 'bo');
+        const level = (kindA === 'sl' || kindB === 'sl') ? -0.5 : edgePair ? -0.5 : -0.8;
         push(add(add(mid, scale(upAvg, level * h)), scale(nAvg, -zsum * d)), node, 0.0);
       } else if (prevNode && !row.castOn) {
         // Row turn. If the previous row ended with a wrap and turn, wrap the yarn around the
@@ -177,6 +179,28 @@ export class YarnPathBuilder {
       const baseC = lerp(P, f.base, 0.4);
       const up = (t) => lerp(P, f.head, t); // fraction of the way to the head target (next row)
       const dn = (t) => lerp(P, f.base, t); // fraction of the way to the parent(s)
+      if (node.op === 'bo' && node.passedOver !== null && node.passedOver < this.nodes.length) {
+        // A bound-off loop: knit into its parent like any stitch, then lifted sideways over
+        // the next loop, which it encircles at the base. The chain lies along the edge.
+        const onto = this.P(node.passedOver);
+        const U = norm(sub(P, f.base));
+        let Cc = sub(onto, P); Cc = norm(sub(Cc, scale(U, dot(Cc, U))));
+        if (!(len(Cc) > 0.5)) Cc = C;
+        const rsRow = row.side === 'rs';
+        const Nn = norm(rsRow ? cross(U, Cc) : cross(Cc, U));
+        const fr = scale(Nn, s * d), bk = scale(Nn, -s * d);
+        const at = (u, c) => add(add(P, scale(U, u * h)), scale(Cc, c * w));
+        push(add(add(dn(0.75), scale(Cc, -0.34 * w)), bk), node, 0.06);
+        push(add(add(dn(0.30), scale(Cc, -0.17 * w)), fr), node, 0.16);
+        push(add(at(0.05, -0.15), fr), node, 0.26);
+        push(add(at(0.12, 0.45), scale(Nn, s * d * 1.3)), node, 0.4);   // over the next loop's legs, in front
+        push(add(at(0.0, 1.15), bk), node, 0.52);                         // round the far side
+        push(add(at(-0.32, 0.5), scale(Nn, -s * d * 1.3)), node, 0.64); // back behind them, lower
+        push(add(add(dn(0.30), scale(Cc, 0.17 * w)), fr), node, 0.84);
+        push(add(add(dn(0.75), scale(Cc, 0.34 * w)), bk), node, 0.94);
+        prevNode = node;
+        continue;
+      }
       switch (node.kind) {
         case 'yo': {
           // A strand over the needle: no legs, but the head must still be hooked by the
@@ -209,15 +233,16 @@ export class YarnPathBuilder {
           break;
         }
         case 'co': {
-          // Cast-on loop: a plain loop whose legs meet at the bottom edge.
-          const bottom = add(P, scale(W, -0.55 * h));
-          push(add(add(bottom, scale(C, -0.15 * w)), front), node, 0.1);
-          push(add(add(lerp(P, f.head, 0.05), scale(C, -0.32 * w)), scale(N, s * d * 0.2)), node, 0.3);
-          push(add(add(headC, scale(C, -0.25 * w)), back), node, 0.42);
+          // Cast-on loop (long-tail): the strand runs along the bottom edge and each loop
+          // is twisted at its base, one leg crossing in front of the other.
+          const bottom = add(P, scale(W, -0.5 * h));
+          push(add(add(bottom, scale(C, -0.2 * w)), back), node, 0.08);
+          push(add(add(lerp(P, f.head, 0.15), scale(C, 0.3 * w)), front), node, 0.26);
+          push(add(add(headC, scale(C, 0.25 * w)), back), node, 0.4);
           push(add(headC, back), node, 0.5);
-          push(add(add(headC, scale(C, 0.25 * w)), back), node, 0.58);
-          push(add(add(lerp(P, f.head, 0.05), scale(C, 0.32 * w)), scale(N, -s * d * 0.2)), node, 0.7);
-          push(add(add(bottom, scale(C, 0.15 * w)), front), node, 0.9);
+          push(add(add(headC, scale(C, -0.25 * w)), back), node, 0.6);
+          push(add(add(lerp(P, f.head, 0.15), scale(C, -0.3 * w)), back), node, 0.74);
+          push(add(add(bottom, scale(C, 0.2 * w)), front), node, 0.92);
           break;
         }
         default: {
